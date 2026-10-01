@@ -500,6 +500,8 @@ class ProductImportJob implements ShouldQueue
         $product->category                  = $fourthId ?? $bottomId;
         $product->save();
 
+        $this->assignCategoryImages($product, [$midId, $bottomId, $fourthId]);
+
         return $product;
     }
 
@@ -629,6 +631,81 @@ class ProductImportJob implements ShouldQueue
     // =========================================================
     // CATEGORIES
     // =========================================================
+    // Subcategory image from the imported product's image (CSV + API imports).
+    // A category that already has an image is never touched. Otherwise the product
+    // image is used when the product sits directly in that category (deepest level)
+    // or its title/description mentions the category name, so the image is relevant.
+    protected array $categoryImageSettled = [];
+
+    protected function assignCategoryImages(Products $product, array $categoryIds): void
+    {
+        try {
+            $image = $product->image;
+            $ids   = array_values(array_filter($categoryIds));
+            if (empty($image) || empty($ids)) return;
+
+            $deepestId = end($ids);
+            $text      = strtolower(strip_tags($product->title . ' ' . $product->description));
+
+            foreach ($ids as $id) {
+                if (isset($this->categoryImageSettled[$id])) continue;
+
+                $category = Categories::find($id);
+                if (!$category || !empty($category->image)) {
+                    $this->categoryImageSettled[$id] = true;   // already has an image — skip
+                    continue;
+                }
+
+                if ($id !== $deepestId && !$this->textMatchesTitle($text, $category->title)) continue;
+
+                $file = $this->saveCategoryImage($image);
+                if (!$file) continue;
+
+                $category->image = $file;
+                $category->save();
+                $this->categoryImageSettled[$id] = true;
+            }
+        } catch (\Throwable $e) {
+            \Log::warning("ImportJob: category image skipped for product [{$product->id}]: " . $e->getMessage());
+        }
+    }
+
+    protected function textMatchesTitle(string $text, string $title): bool
+    {
+        $words = array_filter(
+            preg_split('/\W+/', strtolower($title)),
+            fn($w) => strlen($w) > 2 && !in_array($w, ['and', 'the', 'for', 'with', 'only'], true)
+        );
+        foreach ($words as $w) {
+            if (str_contains($text, rtrim($w, 's'))) return true;
+        }
+        return false;
+    }
+
+    // Download (URL) or copy (already-uploaded product file) into public/uploads/Category
+    protected function saveCategoryImage(string $image): ?string
+    {
+        $dir = public_path('uploads/Category');
+        if (!is_dir($dir)) mkdir($dir, 0777, true);
+
+        if (preg_match('#^https?://#i', $image)) {
+            $data = @file_get_contents($image, false, stream_context_create(
+                ['http' => ['timeout' => 20, 'user_agent' => 'Mozilla/5.0']]
+            ));
+            if (!$data || strlen($data) < 500) return null;
+            $ext = strtolower(pathinfo(parse_url($image, PHP_URL_PATH), PATHINFO_EXTENSION)) ?: 'jpg';
+        } else {
+            $source = public_path(self::IMAGE_STORAGE_PATH . '/' . $image);
+            if (!is_file($source)) return null;
+            $data = file_get_contents($source);
+            $ext  = strtolower(pathinfo($source, PATHINFO_EXTENSION)) ?: 'jpg';
+        }
+
+        $name = time() . '_' . uniqid() . '.' . $ext;
+        file_put_contents("{$dir}/{$name}", $data);
+        return $name;
+    }
+
     // Stamp the importing supplier on the category (saved only when it differs)
     protected function assignSupplier(Categories $category): Categories
     {
