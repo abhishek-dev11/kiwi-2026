@@ -173,7 +173,11 @@
                                         </a>
                                     </div>
                                     <h5>
-                                        <a href="">
+                                        <a href="{{ route('products', [
+                                                'parent_slug' => $value['parent_slug'],
+                                                'child_slug' => $value['child_slug'],
+                                                'sub_child_slug' => $value['sub_child_slug'],
+                                            ]) }}">
                                             {{ ($value['title']) }} (<span>{{($value['count'])}}</span>)
                                         </a>
                                     </h5>

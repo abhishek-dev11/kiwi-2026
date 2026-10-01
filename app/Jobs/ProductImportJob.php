@@ -629,6 +629,16 @@ class ProductImportJob implements ShouldQueue
     // =========================================================
     // CATEGORIES
     // =========================================================
+    // Stamp the importing supplier on the category (saved only when it differs)
+    protected function assignSupplier(Categories $category): Categories
+    {
+        if ((int) $category->supplier_id !== (int) $this->supplierId) {
+            $category->supplier_id = $this->supplierId;
+            $category->save();
+        }
+        return $category;
+    }
+
     protected function getOrCreateTopCategory(string $name, array &$cache): ?int
     {
         if (empty($name)) return null;
@@ -640,7 +650,7 @@ class ProductImportJob implements ShouldQueue
                 ['slug'  => createSlug('categories', $name)]
             );
         }
-        return $cache[$key]->id;
+        return $this->assignSupplier($cache[$key])->id;
     }
 
     protected function getOrCreateMidCategory(
@@ -655,7 +665,7 @@ class ProductImportJob implements ShouldQueue
                 ['slug'  => createSlug('categories', $this->buildMidCategorySlugText($midName, $topId))]
             );
         }
-        return $cache[$key]->id;
+        return $this->assignSupplier($cache[$key])->id;
     }
 
     protected function getOrCreateBottomCategory(
@@ -675,7 +685,7 @@ class ProductImportJob implements ShouldQueue
                 ['slug' => createSlug('categories', $this->buildBottomCategorySlugText($name, $topId, $midId))]
             );
         }
-        return $cache[$key]->id;
+        return $this->assignSupplier($cache[$key])->id;
     }
 
     protected function getOrCreateFourthCategory(
@@ -695,7 +705,7 @@ class ProductImportJob implements ShouldQueue
                 ['slug' => createSlug('categories', $this->buildFourthCategorySlugText($name, $topId, $midId, $bottomId))]
             );
         }
-        return $cache[$key]->id;
+        return $this->assignSupplier($cache[$key])->id;
     }
 
     protected function buildMidCategorySlugText(string $midName, int $topId): string

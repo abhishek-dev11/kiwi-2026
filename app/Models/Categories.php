@@ -14,7 +14,8 @@ class Categories extends Model
         'slug',
         'top_level_category_id',
         'mid_level_category_id',
-        'bottom_level_category_id'
+        'bottom_level_category_id',
+        'supplier_id'
     ];
 
     // Top-level -> mid-level
