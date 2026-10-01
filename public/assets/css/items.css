@@ -1,0 +1,106 @@
+.item_main .items_info p {
+  font-family: "Nunito Sans", sans-serif;
+  font-weight: 500;
+  font-size: 16px;
+  color: #45464E;
+  margin-bottom: 20px;
+}
+
+.content-wrapper .items_details {
+  box-shadow: 6px 6px 54px 0px #0000000D;
+  background: #fff;
+  border-radius: 14px;
+  padding: 26px 23px 0px 23px;
+}
+
+.content-wrapper .items_details .tab-content {
+    padding-left: 0;
+    padding-right: 0;
+}
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 15px;
+  gap: 37px;
+}
+
+.search-box {
+  border-radius: 6px;
+  border: 1px solid #C4C4C4;
+  padding: 3px 3px 3px 14px;
+  width: 90%;
+}
+
+.search-box input {
+  border: none;
+  outline: none;
+  flex: 1;
+  width: 93%;
+}
+
+/* Search & Add */
+
+.search-box button {
+  background: #eee;
+  border: none;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.add-btn {
+  background: #ff6b6b;
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+/* Filters */
+.filters {
+  margin-bottom: 10px;
+}
+
+.filters button {
+  background: #f1f1f1;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 20px;
+  margin-right: 5px;
+  cursor: pointer;
+}
+
+.filters button.active {
+  background: #ff6b6b;
+  color: #fff;
+}
+
+/* Table */
+.summary {
+  font-weight: bold;
+  color: red;
+  margin-bottom: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 10px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+
+th {
+  background: #f7f7f7;
+}
+
+.action-btn {
+  color: #ff6b6b;
+  cursor: pointer;
+  font-size: 18px;
+}

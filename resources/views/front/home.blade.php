@@ -1,0 +1,536 @@
+@extends('front.layout.master')
+@section('content')
+
+<!-- Hero Section -->
+<div class="hero_section">
+    <div class="container">
+        <div class="hero_slider">
+
+            <div class="slide">
+                <div class="slide_content">
+                    <div class="text">
+                        <h1>KX3 Technical <br> Fleece – T831GRR – Grey</h1>
+                        <p>Technical work jacket made with our unique fabric.</p>
+                        <a href="#" class="btn">Shop Now</a>
+                    </div>
+                    <div class="slider_image">
+                        <img src="{{ asset('assets/dist/images/herosec_img.png') }}" alt="">
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="slide_content">
+                    <div class="text">
+                        <h1>Winter Collection</h1>
+                        <p>Stay warm with premium jackets.</p>
+                        <a href="#" class="btn">Shop Now</a>
+                    </div>
+                    <div class="slider_image">
+                        <img src="{{ asset('assets/dist/images/sliderimg2.png') }}" alt="">
+                    </div>
+                </div>
+            </div>
+
+            <div class="slide">
+                <div class="slide_content">
+                    <div class="text">
+                        <h1>Premium Quality</h1>
+                        <p>Comfort + durability.</p>
+                        <a href="#" class="btn">Shop Now</a>
+                    </div>
+                    <div class="slider_image">
+                        <img src="{{ asset('assets/dist/images/herosec_img.png') }}" alt="">
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<!-- category Section -->
+<div class="category_section">
+    <div class="container">
+        <h2 class="common_heading">Explore More <span>Categories</span></h2>
+
+        <div class="category_slider" id="categories_slider">
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/apparel">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Apparel.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Apparel</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/cafe">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Cafe.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Cafe</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/hygiene">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Hygiene.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Hygiene</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/office-furniture">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Office-Furniture.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Office Furniture</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/packaging">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Packaging.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Packaging</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/promotional">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Promotional.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Promotional</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/safety">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Safety.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Safety</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/stationery">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Stationery.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Stationery</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/trade-events">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/Trade-Events.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Trade Events</h4>
+                </a>
+            </div>
+
+            <div class="slide">
+                <a href="https://kiwi.infosparkles.net/product-category/tools">
+                    <div class="category_img">
+                        <div class="cat_inner_img">
+                            <img src="{{ asset('assets/dist/images/category-tools.svg') }}">
+                        </div>
+                    </div>
+                    <h4 class="category_name">Tools</h4>
+                </a>
+            </div>
+        </div>
+
+        <div class="category_allbtn common_btn">
+            <a href="{{ route('shop') }}">See All</a>
+        </div>
+    </div>
+</div>
+
+<!-- best deals section -->
+<div class="best_dealssection">
+    <div class="container">
+        <div class="bestdeal_toprow">
+            <h2 class="common_heading">Best <span>Deals</span></h2>
+            <div class="category_allbtn common_btn">
+                <a href="#">Browse</a>
+            </div>
+        </div>
+
+        <div class="dealsecond_row">
+            <div class="second_leftcol">
+
+                <div class="dealblack_box dealsmain_box">
+                    <div class="boxtop">
+                        <h3>Die Cut Box with Locking Lid</h3>
+                        <div class="common_btn">
+                            <a href="#">Browse</a>
+                        </div>
+                    </div>
+                    <div class="deals_img">
+                        <img src="{{ asset('assets/dist/images/Dealsimg-1.png') }}">
+                    </div>
+                </div>
+
+                <div class="dealorange_box dealsmain_box">
+                    <div class="boxtop">
+                        <h3>Armour Leather Full Split Rigger Glove LGRIG</h3>
+                        <div class="common_btn">
+                            <a href="#">Browse</a>
+                        </div>
+                    </div>
+                    <div class="deals_img">
+                        <img src="{{ asset('assets/dist/images/Dealsimg-2.png') }}">
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="second_rightcol dealsmain_box">
+                <div class="boxtop dealsright_inner">
+                    <h3>Keepsake Picnic Blanket</h3>
+                    <div class="common_btn">
+                        <a href="#">Browse</a>
+                    </div>
+                </div>
+                <div class="right_colimg">
+                    <img src="{{ asset('assets/dist/images/Dealsimg-3.png') }}">
+                </div>
+            </div>
+        </div>
+
+        <div class="dealsecond_row">
+            <div class="second_rightcol dealsmain_box">
+                <div class="boxtop dealsright_inner">
+                    <h3>Bobby Sling</h3>
+                    <div class="common_btn">
+                        <a href="#">Browse</a>
+                    </div>
+                </div>
+                <div class="right_colimg">
+                    <img src="{{ asset('assets/dist/images/Dealsimg-4.png') }}">
+                </div>
+            </div>
+
+            <div class="second_leftcol">
+
+                <div class="dealblack_box dealsmain_box">
+                    <div class="boxtop">
+                        <h3>Chai Teapot</h3>
+                        <div class="common_btn">
+                            <a href="#">Browse</a>
+                        </div>
+                    </div>
+                    <div class="deals_img">
+                        <img src="{{ asset('assets/dist/images/Dealsimg-5.png') }}">
+                    </div>
+                </div>
+
+                <div class="dealorange_box dealsmain_box">
+                    <div class="boxtop">
+                        <h3>Atlas Shaker – 400ml</h3>
+                        <div class="common_btn">
+                            <a href="#">Browse</a>
+                        </div>
+                    </div>
+                    <div class="deals_img">
+                        <img src="{{ asset('assets/dist/images/Dealsimg-6.png') }}">
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- Trending brands section -->
+<div class="trendingbrands_section">
+    <div class="container">
+        <div class="trendingbrands_row">
+
+            <div class="brand_leftcol">
+                <img src="{{ asset('assets/dist/images/treanding_brandimg.png') }}">
+            </div>
+
+            <div class="brand_rightcol">
+                <h2 class="common_heading">Trending <span>Brands</span></h2>
+
+                <div class="brand_logo">
+                    <img src="{{ asset('assets/dist/images/brand_logo1.png') }}">
+                    <img src="{{ asset('assets/dist/images/brand_logo2.png') }}">
+                    <img src="{{ asset('assets/dist/images/brand_logo3.png') }}">
+                    <img src="{{ asset('assets/dist/images/brand_logo4.png') }}">
+                    <img src="{{ asset('assets/dist/images/brand_logo5.png') }}">
+                    <img src="{{ asset('assets/dist/images/brand_logo6.png') }}">
+                </div>
+
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<!-- Top Selling Products -->
+@if($featuredProducts->count())
+<div class="top_sellingsection">
+    <div class="container">
+        <div class="top_selltoprow">
+            <h2 class="common_heading">Top Selling <span>Products</span></h2>
+            <div class="category_allbtn common_btn">
+                <a href="{{ route('shop') }}">Browse</a>
+            </div>
+        </div>
+
+        <div class="selling_secondrow selling_prodslider">
+
+            @foreach ($featuredProducts as $value)
+                @php
+                    if ($value->product_type == 'variable') {
+                        $minVariant    = $value->subVariantItems->first();
+                        $originalPrice = $minVariant->price ?? 0;
+                        $salePrice     = null;
+                        $finalPrice    = calculateProductPrice($originalPrice);
+                    } else {
+                        $originalPrice = $value->regular_price;
+                        $salePrice     = $value->discount_price;
+                        $finalPrice    = calculateProductPrice($originalPrice, $salePrice);
+                    }
+                    $isWishlisted = in_array($value->id, $wishlistedIds ?? []);
+                @endphp
+
+                <div class="slide">
+                    <div class="product_card">
+                        <div class="add_favourite">
+                            <div class="like_icon">
+                                @if(Auth::guard('customers')->check())
+                                    <a href="javascript:void(0);"
+                                       class="WishlistToggle"
+                                       data-id="{{ encrypt($value->id) }}"
+                                       data-wishlisted="{{ $isWishlisted ? '1' : '0' }}">
+                                        <img src="{{ asset($isWishlisted ? 'assets/dist/images/heart_filled.svg' : 'assets/dist/images/cart_likeicon.svg') }}"
+                                             class="wishlist-icon">
+                                    </a>
+                                @else
+                                    <a href="javascript:void(0);" data-bs-toggle="modal" data-bs-target="#loginModal">
+                                        <img src="{{ asset('assets/dist/images/cart_likeicon.svg') }}">
+                                    </a>
+                                @endif
+                            </div>
+                        </div>
+
+                        <div class="product_img">
+                            <a href="{{ route('product-detail', $value->slug) }}">
+                                <img src="{{ resolve_product_image($value->image) }}">
+                            </a>
+                        </div>
+
+                        <div class="product_info">
+                            <h5>{{ $categoryTitles[$value->category] ?? '' }}</h5>
+                            <a href="{{ route('product-detail', $value->slug) }}"> {{ $value->title }}</a>
+                            <p>{{ $value->short_decripation }}</p>
+                        </div>
+
+                        <div class="product_price">
+                            @if($salePrice != '')
+                                <p><s>${{ number_format($originalPrice, 2) }}</s></p>
+                            @endif
+                            <h6><span>$</span>{{ number_format($finalPrice, 2) }}</h6>
+                            @if(Auth::guard('customers')->check())
+                                @if( $value->product_type == 'variable' )
+                                <a href="{{ route('product-detail', $value->slug) }}">
+                                @else
+                                <a class="AddToCartAction" data-id="{{ encrypt($value->id) }}">
+                                @endif
+                            @else
+                                <a data-bs-toggle="modal" data-bs-target="#loginModal">
+                            @endif
+                                Add to Cart
+                                <div class="btncart_icon">
+                                    <img src="{{ asset('assets/dist/images/addtocart-icon.svg') }}">
+                                </div>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            @endforeach
+
+        </div>
+    </div>
+</div>
+@endif
+
+<!-- Today’s Best Deals -->
+<div class="today_dealssec">
+    <div class="container">
+        <h2 class="common_heading">Today’s Best <span>Deals</span></h2>
+
+        <div class="row topdeals_row">
+
+            <div class="col-12 col-md-6">
+                <div class="deal_col">
+                    <div class="top_innerrow">
+                        <h5>Leisure & Outdoors</h5>
+                        <h3>Keepsake Picnic <br>Blanket</h3>
+                        <p>Lorem Ipsum is simply dummy text...</p>
+                        <div class="category_allbtn common_btn">
+                            <a href="#">Browse</a>
+                        </div>
+                    </div>
+                    <div class="img_row">
+                        <img src="{{ asset('assets/dist/images/topDeal_img1.png') }}">
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6">
+                <div class="deal_col">
+                    <div class="top_innerrow">
+                        <h5>Leisure & Outdoors</h5>
+                        <h3>Bobby <br>Sling</h3>
+                        <p>Lorem Ipsum is simply dummy text...</p>
+                        <div class="category_allbtn common_btn">
+                            <a href="#">Browse</a>
+                        </div>
+                    </div>
+                    <div class="img_row">
+                        <img src="{{ asset('assets/dist/images/topDeal_img2.png') }}">
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<!--  -->
+<div class="service_processsec">
+    <div class="container">
+        <div class="process_row">
+
+            <div class="procsess_box">
+                <div class="process_img">
+                    <img src="{{ asset('assets/dist/images/Nationwideimg.svg') }}">
+                </div>
+                <div class="process_text">
+                    <h5>Nationwide Service & Delivery</h5>
+                    <p>Get your order anywhere in NewZealand</p>
+                </div>
+            </div>
+
+            <div class="procsess_box setpandm">
+                <div class="process_img">
+                    <img src="{{ asset('assets/dist/images/NZFamilyimg.svg') }}">
+                </div>
+                <div class="process_text">
+                    <h5>NZ Family Owned & Operated</h5>
+                    <p>100% Owned and Operated in NewZealand</p>
+                </div>
+            </div>
+
+            <div class="procsess_box">
+                <div class="process_img">
+                    <img src="{{ asset('assets/dist/images/CustomerServiceimg.svg') }}">
+                </div>
+                <div class="process_text">
+                    <h5>8am - 5pm Customer Service</h5>
+                    <p>Want to talk to a person? Choose chat or call us</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<!--  -->
+<div class="flash_deals_section">
+    <div class="container">
+        <div class="row">
+
+            <!-- LEFT FLASH DEAL CARD -->
+            <div class="col-12 col-md-4 col-lg-3">
+                <div class="flash_card">
+                    <h2 class="common_heading">Flash <span>Deals</span></h2>
+                    <p>Ends in</p>
+
+                    <div class="countdown">
+                        <div class="time_box" id="hours">00</div>
+                        <span>:</span>
+                        <div class="time_box" id="minutes">10</div>
+                        <span>:</span>
+                        <div class="time_box" id="seconds">15</div>
+                    </div>
+
+                    <div class="category_allbtn common_btn">
+                        <a href="#">See All</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PRODUCT CARD 1 -->
+            <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                <div class="flashdeal_card">
+                    <img src="{{ asset('assets/dist/images/flashdeals-img.png') }}">
+                    <div class="product_cardinfo">
+                        <h6>Misc Print</h6>
+                        <h5>Die Cut Box with Locking Lid – 300x225x113mm</h5>
+                        <p>Lorem Ipsum is simply dummy text...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PRODUCT CARD 2 -->
+            <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                <div class="flashdeal_card">
+                    <img src="{{ asset('assets/dist/images/flashdeals-img.png') }}">
+                    <div class="product_cardinfo">
+                        <h6>Misc Print</h6>
+                        <h5>Die Cut Box with Locking Lid – 300x225x113mm</h5>
+                        <p>Lorem Ipsum is simply dummy text...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PRODUCT CARD 3 -->
+            <div class="col-12 col-sm-6 col-md-4 col-lg-3">
+                <div class="flashdeal_card">
+                    <img src="{{ asset('assets/dist/images/flashdeals-img.png') }}">
+                    <div class="product_cardinfo">
+                        <h6>Misc Print</h6>
+                        <h5>Die Cut Box with Locking Lid – 300x225x113mm</h5>
+                        <p>Lorem Ipsum is simply dummy text...</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+@endsection

@@ -1,0 +1,361 @@
+<?php
+
+namespace App\Jobs;
+
+use Illuminate\Support\Facades\Http;
+
+class TrendsProductImportJob extends ProductImportJob
+{
+    // Safety cap so a mis-detected "more pages" heuristic can never loop forever.
+    const MAX_PAGES = 500;
+
+    // Trends' Collections (119) and Brands (115) top-level categories are cross-cutting
+    // tags (occasions like "Fundraising", or brand names like "Swiss Peak"), not product
+    // types — confirmed live by reading their sub_categories. Skipped when picking the
+    // category to import a product under, same idea as ignoring Fashion Biz's tag bag.
+    const SKIP_TOP_CATEGORY_IDS = [119, 115];
+
+    protected int $page;
+    protected int $perPage;
+
+    // Confirmed live: 100 products/page (~350 KB) takes only a couple of seconds, and the
+    // account's rate limit (300 req/min, confirmed via response headers) has plenty of
+    // headroom for the ~27 pages a full 2,700-product catalogue needs.
+    public function __construct(string $importId, int $supplierId, int $page, int $perPage = 100)
+    {
+        $this->importId   = $importId;
+        $this->supplierId = $supplierId;
+        $this->page       = $page;
+        $this->perPage    = $perPage;
+
+        // Only used for log messages in the parent class — not read from anywhere functionally.
+        $this->path        = "trends:page={$page}";
+        $this->startRow    = $page;
+        $this->endRow      = $page;
+        $this->totalChunks = 0;
+    }
+
+    // =========================================================
+    // FETCH EVERY PAGE FROM THE TRENDS API, ITERATIVELY
+    // =========================================================
+    // Previously this recursed — dispatchNextPage() called a new job's
+    // ->handle() from inside readRows(), before the current page's rows were
+    // returned. That kept every page's full decoded JSON body alive on the
+    // call stack simultaneously (27 pages deep for the full catalogue) and
+    // blew the 512 MB memory limit. Looping in place instead means only ONE
+    // page's raw response is ever in memory at a time — each is unset before
+    // moving to the next.
+    protected function readRows(): array
+    {
+        $categoryMap = $this->getCategoryMap();
+        $stockMap    = $this->getStockMap();
+
+        $allRows   = [];
+        $page      = $this->page;
+        $pageCount = 0;
+
+        while ($page <= self::MAX_PAGES) {
+            $body     = $this->fetchPage($page);
+            $products = $body['data'] ?? [];
+
+            $rows = $this->flattenProductsToRows($products, $categoryMap, $stockMap);
+            foreach ($rows as $row) {
+                $allRows[] = $row;
+            }
+
+            $pageCount++;
+            $hasMore = $this->hasMorePages($body);
+
+            // Free this page's raw response/product array before fetching the
+            // next one, rather than letting it sit on the stack.
+            unset($body, $products, $rows);
+
+            if (!$hasMore) {
+                break;
+            }
+
+            $page++;
+        }
+
+        if ($pageCount > 1) {
+            $this->growTotalChunks($pageCount - 1);
+        }
+
+        return $allRows;
+    }
+
+    protected function fetchPage(int $page): array
+    {
+        if ($page > self::MAX_PAGES) {
+            \Log::warning("TrendsProductImportJob [{$this->importId}]: page {$page} exceeds MAX_PAGES safety cap — stopping.");
+            return [];
+        }
+
+        $baseUrl = rtrim(config('services.trends.base_url'), '/');
+        $token   = config('services.trends.token');
+
+        $response = Http::withToken($token)
+            ->acceptJson()
+            ->timeout(60)
+            ->get("{$baseUrl}/api/v1/products.json", [
+                'page'     => $page,
+                'per_page' => $this->perPage,
+            ]);
+
+        if ($response->failed()) {
+            throw new \RuntimeException(
+                "Trends API request failed (page {$page}): HTTP {$response->status()} — {$response->body()}"
+            );
+        }
+
+        return $response->json() ?? [];
+    }
+
+    protected function hasMorePages(array $body): bool
+    {
+        // Confirmed live shape: {"status","country","page_count","page_current","page_size","total_items","data":[...]}
+        return (int) ($body['page_current'] ?? 0) < (int) ($body['page_count'] ?? 0);
+    }
+
+    // Updates the shared import_meta total_chunks count so the progress bar
+    // still reflects however many pages this run actually fetched — same
+    // bookkeeping as before, just called once with the final page count
+    // instead of once per recursive dispatch.
+    protected function growTotalChunks(int $by): void
+    {
+        $metaKey = "import_meta_{$this->importId}";
+        $lock    = cache()->lock("import_lock_{$this->importId}", 15);
+
+        try {
+            $lock->block(30);
+
+            $meta = cache()->get($metaKey, []);
+            if (!empty($meta)) {
+                $meta['total_chunks'] = (int) ($meta['total_chunks'] ?? 1) + $by;
+                cache()->put($metaKey, $meta, now()->addHours(3));
+            }
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+            \Log::warning("TrendsProductImportJob: Could not acquire lock to grow total_chunks [{$this->importId}]: " . $e->getMessage());
+        } finally {
+            optional($lock)->release();
+        }
+    }
+
+    // =========================================================
+    // CATEGORY TREE (id → top/mid names), fetched once per import run and
+    // shared across every page's job via the cache, keyed by importId so a
+    // later sync always sees fresh data instead of a stale run's snapshot.
+    // =========================================================
+    protected function getCategoryMap(): array
+    {
+        return cache()->remember("trends_category_map_{$this->importId}", now()->addHours(3), function () {
+            $baseUrl = rtrim(config('services.trends.base_url'), '/');
+            $token   = config('services.trends.token');
+
+            $response = Http::withToken($token)
+                ->acceptJson()
+                ->timeout(60)
+                ->get("{$baseUrl}/api/v1/categories.json");
+
+            if ($response->failed()) {
+                throw new \RuntimeException(
+                    "Trends categories API request failed: HTTP {$response->status()} — {$response->body()}"
+                );
+            }
+
+            $map = [];
+            foreach ($response->json('data') ?? [] as $top) {
+                $map[$top['id']] = ['top' => $top['name'], 'mid' => '', 'topId' => $top['id']];
+                foreach ($top['sub_categories'] ?? [] as $sub) {
+                    $map[$sub['id']] = ['top' => $top['name'], 'mid' => $sub['name'], 'topId' => $top['id']];
+                }
+            }
+
+            return $map;
+        });
+    }
+
+    // =========================================================
+    // STOCK LEVELS (stock_code → quantity), fetched once per import run —
+    // same caching approach as the category map above.
+    // =========================================================
+    protected function getStockMap(): array
+    {
+        return cache()->remember("trends_stock_map_{$this->importId}", now()->addHours(3), function () {
+            $baseUrl = rtrim(config('services.trends.base_url'), '/');
+            $token   = config('services.trends.token');
+
+            $response = Http::withToken($token)
+                ->acceptJson()
+                ->timeout(60)
+                ->get("{$baseUrl}/api/v1/stock/all.json");
+
+            if ($response->failed()) {
+                throw new \RuntimeException(
+                    "Trends stock API request failed: HTTP {$response->status()} — {$response->body()}"
+                );
+            }
+
+            $map = [];
+            foreach ($response->json('data') ?? [] as $stock) {
+                $map[$stock['stock_code']] = (int) ($stock['quantity'] ?? 0);
+            }
+
+            return $map;
+        });
+    }
+
+    // =========================================================
+    // MAP API RESPONSE → THE ROW SHAPE ProductImportJob EXPECTS
+    // =========================================================
+    protected function flattenProductsToRows(array $products, array $categoryMap, array $stockMap): array
+    {
+        $rows = [];
+
+        foreach ($products as $product) {
+            // Ascending-by-quantity tiers confirmed live for every sampled product — the
+            // lowest-qty tier is the standard "starting from" unit price, same convention
+            // used for the other suppliers' qty-tiered pricing.
+            $tiers = $product['pricing']['prices'] ?? [];
+            if (empty($tiers)) {
+                continue;
+            }
+            usort($tiers, fn($a, $b) => ($a['quantity'] ?? 0) <=> ($b['quantity'] ?? 0));
+            $price = (float) ($tiers[0]['price'] ?? 0);
+            if ($price <= 0) {
+                continue;
+            }
+
+            $code = (string) ($product['code'] ?? '');
+            $name = $product['name'] ?? '';
+
+            // groupRows() saves this verbatim as the product title — bake the product
+            // code in so two products that happen to share a name don't get merged
+            // (same convention as Banbury/Logo Line/Fashion Biz).
+            $groupName = $code !== '' && stripos($name, $code) === false
+                ? trim($name . ' - ' . $code)
+                : ($name ?: $code);
+
+            [$mainCategory, $subCategory] = $this->resolveCategory($product['categories'] ?? [], $categoryMap);
+
+            $description = $product['description'] ?? '';
+
+            // General product photos (no colour tag) — shared across every colour variant
+            // as gallery fallback/fill. Per-colour photos (colour + stock_code both set)
+            // drive the actual colour rows below, keyed by caption so a duplicate caption
+            // on the same product just overwrites with the later stock_code (confirmed live:
+            // happens on ~1% of products — not worth failing the whole product over).
+            $genericImages = [];
+            $colourImages  = []; // caption => ['url' => ..., 'stock_code' => ...]
+
+            foreach ($product['images'] ?? [] as $image) {
+                $url = $this->normaliseImageUrl($image['link'] ?? '');
+                if ($url === '') continue;
+
+                if (!empty($image['colour']) && isset($image['stock_code']) && $image['stock_code'] !== '') {
+                    $caption = $image['caption'] ?? $image['colour'];
+                    $colourImages[$caption] = ['url' => $url, 'stock_code' => $image['stock_code']];
+                } else {
+                    $genericImages[] = $url;
+                }
+            }
+
+            if (empty($colourImages)) {
+                // No colour breakdown at all — import as a single simple-product row.
+                // No stock data exists for this shape either (confirmed live), so 'inventory'
+                // is left unset and groupRows() defaults to 999 (treated as in-stock), same
+                // as Augmento/JBswear/Fashion Biz's stock-less rows.
+                $rows[] = $this->buildRow(
+                    $code, $name, 'Default', 'Default', $groupName, $description,
+                    $mainCategory, $subCategory, $price, $genericImages, null
+                );
+                continue;
+            }
+
+            $multiColour = count($colourImages) > 1;
+
+            foreach ($colourImages as $caption => $info) {
+                $sku = $multiColour
+                    ? $code . '-' . (preg_replace('/[^A-Za-z0-9]+/', '', $caption) ?: 'VAR')
+                    : $code;
+
+                $rows[] = $this->buildRow(
+                    $sku, $name, $caption, 'Default', $groupName, $description,
+                    $mainCategory, $subCategory, $price,
+                    array_merge([$info['url']], $genericImages),
+                    $stockMap[$info['stock_code']] ?? null
+                );
+            }
+        }
+
+        return $rows;
+    }
+
+    protected function buildRow(
+        string $sku, string $itemName, string $colour, string $size, string $groupName,
+        string $description, string $mainCategory, string $subCategory, float $price,
+        array $images, ?int $inventory
+    ): array {
+        $row = [
+            'sku'              => $sku,
+            'item_name'        => $itemName,
+            'colour'           => $colour,
+            'size'             => $size,
+            'group_name'       => $groupName,
+            'description_html' => $description,
+            'main_category'    => $mainCategory,
+            'sub_sub_category' => $subCategory,
+            'default_price'    => $price,
+        ];
+
+        if ($inventory !== null) {
+            $row['inventory'] = $inventory;
+        }
+
+        $seen = [];
+        $index = 0;
+        foreach ($images as $url) {
+            if (empty($url) || isset($seen[$url])) continue;
+            $seen[$url] = true;
+            $row['image_' . ($index + 1)] = $url;
+            $index++;
+            if ($index >= 6) break;
+        }
+
+        return $row;
+    }
+
+    // Confirmed live: image links come back as protocol-relative ("//media.trends.nz/...")
+    // with a leading space — trim and add the scheme so they're directly usable/downloadable.
+    protected function normaliseImageUrl(string $link): string
+    {
+        $link = trim($link);
+        if ($link === '') return '';
+
+        return str_starts_with($link, '//') ? 'https:' . $link : $link;
+    }
+
+    // Picks the first category entry that isn't a Collections/Brands tag (see
+    // SKIP_TOP_CATEGORY_IDS); falls back to the first entry regardless if every entry on
+    // this product happens to be a tag (confirmed live: doesn't happen in practice, but
+    // better than leaving the product uncategorised).
+    protected function resolveCategory(array $categories, array $categoryMap): array
+    {
+        $fallback = null;
+
+        foreach ($categories as $category) {
+            $info = $categoryMap[$category['id']] ?? null;
+            if (!$info) continue;
+
+            if ($fallback === null) {
+                $fallback = $info;
+            }
+
+            if (!in_array($info['topId'], self::SKIP_TOP_CATEGORY_IDS, true)) {
+                return [$info['top'], $info['mid']];
+            }
+        }
+
+        return $fallback ? [$fallback['top'], $fallback['mid']] : ['', ''];
+    }
+}
