@@ -9,6 +9,8 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 use App\Models\Products;
 use App\Models\Attributes;
 use App\Models\ProductVariants;
@@ -16,6 +18,7 @@ use App\Models\ProductVariantImages;
 use App\Models\ProductSubVariants;
 use App\Models\ProducSubtVariantItems;
 use App\Models\Categories;
+use App\Support\ProductTextCleaner;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class ProductImportJob implements ShouldQueue
@@ -37,6 +40,16 @@ class ProductImportJob implements ShouldQueue
 
     // ── Image storage path (relative to public/) ──
     const IMAGE_STORAGE_PATH = 'uploads/Product';
+
+    // CSV/XLSX imports download each product's image URL into IMAGE_STORAGE_PATH and
+    // store the local filename in products.image (the original URL is kept in
+    // products.image_url). The API-sync subclasses turn this off — they sync thousands
+    // of products per run and keep serving the supplier's own image URLs.
+    protected bool $downloadProductImages = true;
+
+    // Remote URL -> local filename (or null on failure) for this job run, so a URL shared
+    // by several colour groups / products is only fetched once.
+    protected array $downloadedImages = [];
 
     public function __construct(
         string $path,
@@ -61,6 +74,11 @@ class ProductImportJob implements ShouldQueue
         // Each PhpSpreadsheet load can consume 30-80 MB; without a raised limit the
         // worker process dies silently (fatal OOM ≠ catchable exception) around chunk 14.
         ini_set('memory_limit', '512M');
+
+        // Imports run after the HTTP response (dispatch()->afterResponse()), i.e. inside the
+        // web process — downloading / checking a chunk's product images can take longer
+        // than PHP's max_execution_time, which would kill the chunk mid-way.
+        @set_time_limit(0);
 
         \Log::info("=== ImportJob START [{$this->importId}] lines {$this->startRow}-{$this->endRow} ===");
 
@@ -248,6 +266,64 @@ class ProductImportJob implements ShouldQueue
             || $this->value($row, ['item_name', 'title', 'name']) !== '';
     }
 
+    // Grouping placeholder for a row with no colour / no size. Never stored as an
+    // attribute value: processChunk() picks the product structure from which attributes
+    // the supplier actually gave (colour + size, size only, colour only, or simple).
+    const NO_ATTRIBUTE = 'Default';
+
+    // Normalised spelling -> existing Color value, built once per job (see resolveColour()).
+    protected ?array $existingColours = null;
+
+    // A supplier attribute value, or '' when there is none ("Default" placeholders sent by
+    // some supplier exports / API jobs count as none).
+    protected function attributeValue(string $value): string
+    {
+        $value = trim(preg_replace('/\s+/u', ' ', $value));
+
+        return strcasecmp($value, self::NO_ATTRIBUTE) === 0 ? '' : $value;
+    }
+
+    // The row's colour, matched to an existing Color attribute value when one is spelled
+    // the same ignoring case / spacing ("black / white" -> "BLACK/WHITE"), so the same
+    // colour isn't stored under several spellings. An unmatched colour is kept as the
+    // supplier sent it and becomes a new Color value. '' when the row has no colour.
+    protected function resolveColour(string $colour): string
+    {
+        $colour = $this->attributeValue($colour);
+        if ($colour === '') return '';
+
+        if ($this->existingColours === null) {
+            $this->existingColours = [];
+
+            $colorAttrId = Attributes::where('title', 'Color')->value('id');
+            if ($colorAttrId) {
+                // Most-used spelling wins when the same colour already exists several ways.
+                $rows = ProductVariants::where('attribute_id', $colorAttrId)
+                    ->where('value', '!=', self::NO_ATTRIBUTE)
+                    ->select('value', DB::raw('COUNT(*) as n'))
+                    ->groupBy('value')
+                    ->orderByDesc('n')
+                    ->get();
+
+                foreach ($rows as $row) {
+                    $this->existingColours[$this->colourKey($row->value)] ??= $row->value;
+                }
+            }
+        }
+
+        // A new colour is remembered too, so later rows spelling it differently in the
+        // same import reuse the first spelling.
+        return $this->existingColours[$this->colourKey($colour)] ??= $colour;
+    }
+
+    protected function colourKey(string $colour): string
+    {
+        $key = mb_strtoupper(trim($colour));
+        $key = preg_replace('/\s*([\/,&+-])\s*/u', '$1', $key);
+
+        return preg_replace('/\s+/u', ' ', $key);
+    }
+
     // =========================================================
     // GROUP ROWS → [groupName][color][]
     // =========================================================
@@ -257,10 +333,14 @@ class ProductImportJob implements ShouldQueue
 
         foreach ($rows as $row) {
             $sku        = $this->value($row, ['sku']);
-            $itemName   = $this->value($row, ['item_name', 'title', 'name']);
-            $groupName  = $this->value($row, ['group_name']) ?: $itemName ?: 'unknown';
-            $attribute1 = $this->value($row, ['colour', 'color']) ?: 'Default';
-            $attribute2 = $this->value($row, ['size']) ?: 'Default';
+            // Cleaned before grouping, so rows whose names differ only by broken encoding /
+            // escape junk still group into one product (see ProductTextCleaner).
+            $itemName   = ProductTextCleaner::title($this->value($row, ['item_name', 'title', 'name']));
+            $groupName  = ProductTextCleaner::title($this->value($row, ['group_name'])) ?: $itemName ?: 'unknown';
+            // NO_ATTRIBUTE marks "the supplier gave no colour / no size" for grouping only —
+            // it's never saved as a Color or Size value (see processChunk()).
+            $attribute1 = $this->resolveColour($this->value($row, ['colour', 'color', 'colour_name', 'color_name'])) ?: self::NO_ATTRIBUTE;
+            $attribute2 = $this->attributeValue($this->value($row, ['size'])) ?: self::NO_ATTRIBUTE;
             $cleanTitle = $this->cleanProductTitle($itemName, $attribute1, $attribute2) ?: $groupName;
 
             $galleryImages = [];
@@ -282,13 +362,13 @@ class ProductImportJob implements ShouldQueue
             // price list doesn't track stock levels.
             $quantity = array_key_exists('inventory', $row)
                 ? (int) $this->number($this->value($row, ['inventory']))
-                : 999;
+                : $this->defaultQuantity;
 
             $grouped[$groupName][$attribute1][] = [
                 'sku'                   => $sku,
                 'title'                 => $groupName,
                 'supplier_id'           => $this->supplierId,
-                'description'           => $this->value($row, ['description_html', 'description']),
+                'description'           => ProductTextCleaner::description($this->value($row, ['description_html', 'description'])),
                 'attribute1'            => $attribute1,
                 'attribute2'            => $attribute2,
                 'group_name'            => $groupName,
@@ -348,17 +428,50 @@ class ProductImportJob implements ShouldQueue
     ): void {   // ← was int
         $grouped = $this->groupRows($rows);
 
+        // API imports: check every product image URL in this chunk up front, concurrently,
+        // instead of one blocking request per product inside the loop below.
+        if (!$this->downloadProductImages) {
+            $urls = [];
+            foreach ($grouped as $colorGroups) {
+                foreach ($colorGroups as $productItems) {
+                    $url = trim((string) ($productItems[0]['product_image'] ?? ''));
+                    if (preg_match('#^https?://#i', $url)) $urls[] = $url;
+                }
+            }
+            $this->prefetchImageUrlChecks($urls);
+        }
+
         foreach ($grouped as $baseTitle => $colorGroups) {
-            // Simple product: only one 'Default' color group and all sizes are also 'Default'
-            $colorKeys = array_keys($colorGroups);
-            $isSimple  = count($colorKeys) === 1
-                && $colorKeys[0] === 'Default'
-                && count(array_filter($colorGroups['Default'], fn($i) => $i['attribute2'] !== 'Default')) === 0;
+            // Product structure follows the attributes the supplier actually gave — a
+            // missing colour or size is never stored as a "Default" value:
+            //   colour + size -> Color variants, each with Size sub-variants
+            //   size only     -> single attribute: Size variants (no Color at all)
+            //   colour only   -> single attribute: Color variants (no Size at all)
+            //   neither       -> simple product
+            $hasColour = count(array_diff(array_keys($colorGroups), [self::NO_ATTRIBUTE])) > 0;
+            $hasSize   = false;
+            foreach ($colorGroups as $items) {
+                foreach ($items as $i) {
+                    if ($i['attribute2'] !== self::NO_ATTRIBUTE) { $hasSize = true; break 2; }
+                }
+            }
+
+            $isSimple = !$hasColour && !$hasSize;
+            $mode     = $isSimple ? 'simple'
+                : ($hasColour && $hasSize ? 'colour_size' : ($hasSize ? 'size' : 'colour'));
+
+            if ($mode === 'colour_size' && isset($colorGroups[self::NO_ATTRIBUTE])) {
+                // Some rows of a coloured product came without a colour — they can't be
+                // placed under a real colour, so they're left out rather than shown as a
+                // "Default" colour option.
+                \Log::warning("ImportJob: [{$baseTitle}] skipped " . count($colorGroups[self::NO_ATTRIBUTE]) . " row(s) with no colour (other rows of this product have one)");
+                unset($colorGroups[self::NO_ATTRIBUTE]);
+            }
 
             foreach ($colorGroups as $colorKey => $productItems) {
                 try {
                     DB::transaction(function () use (
-                        $isSimple, $colorKey, $productItems,
+                        $isSimple, $mode, $colorKey, $productItems,
                         &$topCategoryCache, &$midCategoryCache,
                         &$bottomCategoryCache, &$fourthCategoryCache,
                         &$attributeCache
@@ -393,21 +506,33 @@ class ProductImportJob implements ShouldQueue
                             $product = $this->upsertProduct($first, $topId, $midId, $bottomId, $fourthId, 'simple');
                             $this->insertGalleryImages($product->id, $productItems);
                         } else {
-                            // Variable product — full variant/sub-variant flow
-                            $product        = $this->upsertProduct($first, $topId, $midId, $bottomId, $fourthId, 'variable');
-                            $productId      = $product->id;
+                            $product   = $this->upsertProduct($first, $topId, $midId, $bottomId, $fourthId, 'variable');
+                            $productId = $product->id;
 
                             $this->insertGalleryImages($productId, $productItems);
 
-                            $colorVariantId = $this->upsertColorVariant(
-                                $productId, $colorKey, $attributeCache
-                            );
+                            if ($mode === 'size') {
+                                // Size only — one Size variant per row, priced directly.
+                                $this->insertSingleAttributeVariants($productId, 'Size', $productItems, $attributeCache);
+                            } elseif ($mode === 'colour') {
+                                // Colour only — this colour group is one Color variant.
+                                $colorVariantId = $this->upsertColorVariant($productId, $colorKey, $attributeCache);
+                                $this->insertSingleAttributeItem($productId, $colorVariantId, $productItems[0]);
+                                $this->insertVariantImages($productId, $colorVariantId, $productItems);
+                            } else {
+                                // Colour + size — full variant/sub-variant flow
+                                $colorVariantId = $this->upsertColorVariant(
+                                    $productId, $colorKey, $attributeCache
+                                );
 
-                            $this->insertSubVariantsAndItems(
-                                $productId, $colorVariantId, $productItems
-                            );
+                                $this->insertSubVariantsAndItems(
+                                    $productId, $colorVariantId, $productItems
+                                );
 
-                            $this->insertVariantImages($productId, $colorVariantId, $productItems);
+                                $this->insertVariantImages($productId, $colorVariantId, $productItems);
+                            }
+
+                            $this->removeStaleDefaultVariants($productId, $mode, $attributeCache);
                         }
 
                     });
@@ -417,6 +542,8 @@ class ProductImportJob implements ShouldQueue
                 }
             }
         }
+
+        $this->assignFallbackCategoryImages();
         // ← removed return $processedCount
     }
 
@@ -492,7 +619,7 @@ class ProductImportJob implements ShouldQueue
         $product->quantity                  = $item['quantity'];
         $product->regular_price             = $item['regular_price'];
         $product->discount_price            = $item['discount_price'];
-        $product->image                     = $item['product_image'];
+        $this->assignProductImage($product, (string) ($item['product_image'] ?? ''));
         $product->top_level_category_id     = $topId;
         $product->mid_level_category_id     = $midId;
         $product->bottom_level_category_id  = $bottomId;
@@ -505,7 +632,195 @@ class ProductImportJob implements ShouldQueue
         return $product;
     }
 
-    
+    // =========================================================
+    // PRODUCT IMAGE
+    // =========================================================
+    // Sets products.image / products.image_url from the row's image value. Only an image
+    // URL that is actually reachable is ever stored:
+    //  - file imports download it into public/uploads/Product (the download is the check)
+    //    and products.image gets the local filename;
+    //  - API imports check it with isImageUrlAccessible() and store the URL itself.
+    // A URL that 404s, errors, times out or isn't an image leaves both columns NULL —
+    // nothing is downloaded and the import carries on with the next product.
+    protected function assignProductImage(Products $product, string $image): void
+    {
+        $image = trim($image);
+
+        if (!preg_match('#^https?://#i', $image)) {
+            // Empty, or already a local filename — store as-is (previous behaviour).
+            $product->image = $image;
+            return;
+        }
+
+        $value = $this->downloadProductImages
+            ? $this->downloadProductImage($image)
+            : ($this->isImageUrlAccessible($image) ? $image : null);
+
+        $product->image     = $value;
+        $product->image_url = $value !== null ? $image : null;
+    }
+
+    // URL -> bool for this job run (see isImageUrlAccessible()).
+    protected array $checkedImageUrls = [];
+
+    // Cross-run cache of URLs that passed the check, so a recurring API sync doesn't
+    // re-check thousands of unchanged image URLs every run. Failures aren't cached
+    // there — a supplier fixing a broken link is picked up on the next run.
+    const IMAGE_CHECK_CACHE_TTL_DAYS = 7;
+
+    protected function isImageUrlAccessible(string $url): bool
+    {
+        if (!array_key_exists($url, $this->checkedImageUrls)) {
+            $this->prefetchImageUrlChecks([$url]);
+        }
+
+        return $this->checkedImageUrls[$url];
+    }
+
+    // Checks many URLs concurrently (batches of 20) and records the results in
+    // $checkedImageUrls. A HEAD request is tried first; servers that reject HEAD
+    // (403/405/501, or no image content-type) get a tiny ranged GET instead.
+    protected function prefetchImageUrlChecks(array $urls): void
+    {
+        $pending = [];
+        foreach (array_unique($urls) as $url) {
+            if (array_key_exists($url, $this->checkedImageUrls)) continue;
+
+            if (Cache::has($this->imageCheckCacheKey($url))) {
+                $this->checkedImageUrls[$url] = true;
+                continue;
+            }
+
+            $pending[] = $url;
+        }
+
+        foreach (array_chunk($pending, 20) as $batch) {
+            $retry = [];
+
+            foreach ($this->poolImageRequests($batch, 'head') as $url => $response) {
+                if ($response instanceof \Illuminate\Http\Client\Response && $response->status() === 404) {
+                    $this->recordImageCheck($url, false, 'HTTP 404');
+                } elseif ($this->isImageResponse($response)) {
+                    $this->recordImageCheck($url, true);
+                } else {
+                    $retry[] = $url;
+                }
+            }
+
+            foreach ($this->poolImageRequests($retry, 'get') as $url => $response) {
+                $ok = $this->isImageResponse($response);
+                $this->recordImageCheck($url, $ok, $ok ? '' : $this->describeImageFailure($response));
+            }
+        }
+    }
+
+    // [url => Response|Throwable]
+    protected function poolImageRequests(array $urls, string $method): array
+    {
+        if (empty($urls)) return [];
+
+        $responses = Http::pool(function ($pool) use ($urls, $method) {
+            foreach ($urls as $url) {
+                $request = $pool->as($url)
+                    ->timeout(15)
+                    ->connectTimeout(8)
+                    ->withUserAgent('Mozilla/5.0 (compatible; ProductImporter/1.0)');
+
+                $method === 'head'
+                    ? $request->head($url)
+                    : $request->withHeaders(['Range' => 'bytes=0-1023'])->get($url);
+            }
+        });
+
+        return array_intersect_key($responses, array_flip($urls));
+    }
+
+    protected function isImageResponse($response): bool
+    {
+        if (!$response instanceof \Illuminate\Http\Client\Response || !$response->successful()) {
+            return false;
+        }
+
+        return str_starts_with(strtolower((string) $response->header('Content-Type')), 'image/');
+    }
+
+    protected function describeImageFailure($response): string
+    {
+        if ($response instanceof \Throwable) return $response->getMessage();
+        if (!$response->successful())        return "HTTP {$response->status()}";
+
+        return 'not an image (' . ($response->header('Content-Type') ?: 'no content-type') . ')';
+    }
+
+    protected function recordImageCheck(string $url, bool $ok, string $reason = ''): void
+    {
+        $this->checkedImageUrls[$url] = $ok;
+
+        if ($ok) {
+            Cache::put($this->imageCheckCacheKey($url), true, now()->addDays(self::IMAGE_CHECK_CACHE_TTL_DAYS));
+        } else {
+            \Log::warning("ImportJob: product image not accessible ({$reason}), image left blank — {$url}");
+        }
+    }
+
+    protected function imageCheckCacheKey(string $url): string
+    {
+        return 'import_image_ok_' . md5($url);
+    }
+
+    // Returns the local filename inside IMAGE_STORAGE_PATH, or null on any failure.
+    // The filename is derived from the URL, so re-importing the same file reuses the
+    // image already on disk instead of downloading it again.
+    protected function downloadProductImage(string $url): ?string
+    {
+        if (array_key_exists($url, $this->downloadedImages)) {
+            return $this->downloadedImages[$url];
+        }
+
+        $this->downloadedImages[$url] = null;
+
+        try {
+            $dir = public_path(self::IMAGE_STORAGE_PATH);
+            if (!is_dir($dir)) mkdir($dir, 0755, true);
+
+            $baseName = pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_FILENAME);
+            $baseName = trim(preg_replace('/[^A-Za-z0-9_-]+/', '-', $baseName), '-') ?: 'product';
+            $baseName = substr($baseName, 0, 80) . '_' . substr(md5($url), 0, 10);
+
+            // Already downloaded by an earlier import of the same URL.
+            foreach (glob("{$dir}/{$baseName}.*") ?: [] as $existing) {
+                return $this->downloadedImages[$url] = basename($existing);
+            }
+
+            $response = Http::timeout(20)
+                ->connectTimeout(10)
+                ->withUserAgent('Mozilla/5.0 (compatible; ProductImporter/1.0)')
+                ->get($url);
+
+            if (!$response->successful()) {
+                \Log::warning("ImportJob: product image HTTP {$response->status()} — {$url}");
+                return null;
+            }
+
+            $data = $response->body();
+            $info = $data !== '' ? @getimagesizefromstring($data) : false;
+            $ext  = $info ? (image_type_to_extension($info[2], false) ?: null) : null;
+
+            if (!$ext) {
+                \Log::warning("ImportJob: product image is not a valid image — {$url}");
+                return null;
+            }
+
+            $fileName = "{$baseName}." . ($ext === 'jpeg' ? 'jpg' : $ext);
+            file_put_contents("{$dir}/{$fileName}", $data);
+
+            return $this->downloadedImages[$url] = $fileName;
+        } catch (\Throwable $e) {
+            \Log::warning("ImportJob: product image download failed [{$url}]: " . $e->getMessage());
+            return null;
+        }
+    }
+
     // =========================================================
     // GALLERY
     // =========================================================
@@ -629,13 +944,102 @@ class ProductImportJob implements ShouldQueue
     }
 
     // =========================================================
+    // SINGLE-ATTRIBUTE VARIANTS (size only / colour only)
+    // =========================================================
+    // Same layout the admin product form saves when only one attribute is chosen:
+    // products.attribute_id = that attribute, products.sub_variant_attribute_id = NULL,
+    // one product_variants row per value, and each price/stock row points straight at it
+    // with product_sub_variant_id = NULL. The product page then shows just that one
+    // attribute, and cart / price lookups work without a second selection.
+    protected function insertSingleAttributeVariants(
+        int $productId, string $attributeTitle, array $productItems, array &$attributeCache
+    ): void {
+        $attributeCache[$attributeTitle] ??= Attributes::firstOrCreate(['title' => $attributeTitle])->id;
+        $attributeId = $attributeCache[$attributeTitle];
+
+        Products::where('id', $productId)->update(['attribute_id' => $attributeId]);
+
+        foreach ($productItems as $item) {
+            $variant = ProductVariants::firstOrCreate([
+                'product_id'   => $productId,
+                'attribute_id' => $attributeId,
+                'value'        => $item['attribute2'],
+            ]);
+
+            $this->insertSingleAttributeItem($productId, $variant->id, $item);
+        }
+    }
+
+    protected function insertSingleAttributeItem(int $productId, int $variantId, array $item): void
+    {
+        Products::where('id', $productId)->update(['sub_variant_attribute_id' => null]);
+
+        ProducSubtVariantItems::updateOrCreate(
+            [
+                'product_id'             => $productId,
+                'product_variant_id'     => $variantId,
+                'product_sub_variant_id' => null,
+            ],
+            [
+                'sku_number' => $item['sku']           ?? '',
+                'stock'      => $item['quantity']      ?? 0,
+                'price'      => $item['regular_price'] ?? 0,
+            ]
+        );
+    }
+
+    // Removes variant data left by an earlier import that stored a missing colour/size as
+    // a "Default" value (or used a different structure), so a re-import doesn't keep
+    // showing "Color: Default" next to the corrected options.
+    protected function removeStaleDefaultVariants(int $productId, string $mode, array &$attributeCache): void
+    {
+        $attributeCache['Color'] ??= Attributes::firstOrCreate(['title' => 'Color'])->id;
+        $attributeCache['Size']  ??= Attributes::firstOrCreate(['title' => 'Size'])->id;
+        $colorId = $attributeCache['Color'];
+        $sizeId  = $attributeCache['Size'];
+
+        $stale = ProductVariants::where('product_id', $productId)
+            ->where(function ($q) use ($mode, $colorId, $sizeId) {
+                if ($mode === 'size') {
+                    $q->where('attribute_id', '!=', $sizeId);
+                } elseif ($mode === 'colour') {
+                    $q->where('attribute_id', '!=', $colorId)->orWhere('value', self::NO_ATTRIBUTE);
+                } else {
+                    $q->where('attribute_id', $colorId)->where('value', self::NO_ATTRIBUTE);
+                }
+            })
+            ->pluck('id');
+
+        if ($stale->isNotEmpty()) {
+            ProducSubtVariantItems::where('product_id', $productId)->whereIn('product_variant_id', $stale)->delete();
+            ProductVariantImages::where('product_id', $productId)->whereIn('product_variant_id', $stale)->delete();
+            DB::table('cart')->where('product_id', $productId)->whereIn('product_variant_id', $stale)->delete();
+            ProductVariants::whereIn('id', $stale)->delete();
+        }
+
+        if ($mode !== 'colour_size') {
+            // Single-attribute product: no sizes-as-sub-variants any more.
+            $subIds = ProductSubVariants::where('product_id', $productId)->pluck('id');
+            if ($subIds->isNotEmpty()) {
+                ProducSubtVariantItems::where('product_id', $productId)->whereNotNull('product_sub_variant_id')->delete();
+                DB::table('cart')->where('product_id', $productId)->whereIn('product_sub_variant_id', $subIds)->delete();
+                ProductSubVariants::whereIn('id', $subIds)->delete();
+            }
+        }
+    }
+
+    // =========================================================
     // CATEGORIES
     // =========================================================
     // Subcategory image from the imported product's image (CSV + API imports).
-    // A category that already has an image is never touched. Otherwise the product
-    // image is used when the product sits directly in that category (deepest level)
-    // or its title/description mentions the category name, so the image is relevant.
-    protected array $categoryImageSettled = [];
+    // A category whose image file exists is never touched (an image column pointing at a
+    // file that is no longer on disk counts as no image). Otherwise the product image is
+    // used when the product sits directly in that category (deepest level) or its
+    // title/description mentions the category name, so the image is relevant. A parent
+    // category no product mentions by name falls back to the first product image seen
+    // under it — see assignFallbackCategoryImages().
+    protected array $categoryImageSettled  = [];
+    protected array $categoryImageFallback = [];
 
     protected function assignCategoryImages(Products $product, array $categoryIds): void
     {
@@ -651,12 +1055,15 @@ class ProductImportJob implements ShouldQueue
                 if (isset($this->categoryImageSettled[$id])) continue;
 
                 $category = Categories::find($id);
-                if (!$category || !empty($category->image)) {
+                if (!$category || $this->categoryImageExists($category->image)) {
                     $this->categoryImageSettled[$id] = true;   // already has an image — skip
                     continue;
                 }
 
-                if ($id !== $deepestId && !$this->textMatchesTitle($text, $category->title)) continue;
+                if ($id !== $deepestId && !$this->textMatchesTitle($text, $category->title)) {
+                    $this->categoryImageFallback[$id] ??= $image;
+                    continue;
+                }
 
                 $file = $this->saveCategoryImage($image);
                 if (!$file) continue;
@@ -668,6 +1075,37 @@ class ProductImportJob implements ShouldQueue
         } catch (\Throwable $e) {
             \Log::warning("ImportJob: category image skipped for product [{$product->id}]: " . $e->getMessage());
         }
+    }
+
+    // Runs once the chunk's products are saved: parent categories that no product
+    // mentioned by name (e.g. "Accessories" above "Insole" / "Socks") still get an image,
+    // from the first product imported under them.
+    protected function assignFallbackCategoryImages(): void
+    {
+        foreach ($this->categoryImageFallback as $id => $image) {
+            if (isset($this->categoryImageSettled[$id])) continue;
+
+            try {
+                $category = Categories::find($id);
+                if (!$category || $this->categoryImageExists($category->image)) continue;
+
+                $file = $this->saveCategoryImage($image);
+                if (!$file) continue;
+
+                $category->image = $file;
+                $category->save();
+                $this->categoryImageSettled[$id] = true;
+            } catch (\Throwable $e) {
+                \Log::warning("ImportJob: fallback category image skipped for category [{$id}]: " . $e->getMessage());
+            }
+        }
+
+        $this->categoryImageFallback = [];
+    }
+
+    protected function categoryImageExists(?string $image): bool
+    {
+        return !empty($image) && is_file(public_path('uploads/Category/' . $image));
     }
 
     protected function textMatchesTitle(string $text, string $title): bool

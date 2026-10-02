@@ -8,9 +8,9 @@ use Illuminate\Console\Command;
 
 class AssignCategoryImages extends Command
 {
-    protected $signature = 'categories:assign-images {--force : Replace existing images} {--dry-run : Show picks without saving}';
+    protected $signature = 'categories:assign-images {--force : Replace existing images} {--dry-run : Show picks without saving} {--supplier= : Only categories of this supplier ID}';
 
-    protected $description = 'Give every fourth-level category a relevant product image, saved to public/uploads/Category';
+    protected $description = 'Give every subcategory without a usable image a relevant product image, saved to public/uploads/Category';
 
     private const STOP_WORDS = ['and', 'the', 'for', 'with', 'only'];
 
@@ -21,10 +21,15 @@ class AssignCategoryImages extends Command
             mkdir($dir, 0777, true);
         }
 
+        // Every subcategory level (mid, bottom, fourth). Without --force, only those with
+        // no image — or whose image column points at a file no longer on disk.
         $categories = Categories::whereNull('is_delete')
-            ->whereNotNull('bottom_level_category_id')
-            ->when(!$this->option('force'), fn($q) => $q->where(fn($w) => $w->whereNull('image')->orWhere('image', '')))
-            ->get();
+            ->whereNotNull('top_level_category_id')
+            ->when($this->option('supplier'), fn($q, $id) => $q->where('supplier_id', $id))
+            ->get()
+            ->when(!$this->option('force'), fn($c) => $c->filter(
+                fn($cat) => empty($cat->image) || !is_file("{$dir}/{$cat->image}")
+            ));
 
         $done = 0;
         $failed = [];
@@ -61,12 +66,16 @@ class AssignCategoryImages extends Command
         return self::SUCCESS;
     }
 
-    // Products of the parent (third-level) category, else of its mid-level
-    // ancestor; the best title/description match for the category name wins.
+    // Products in the category itself, else of its parent (third-level) category, else
+    // of its mid-level ancestor; the best title/description match for the category name
+    // wins.
     private function pickProduct(Categories $category): ?Products
     {
         $parent = Categories::find($category->bottom_level_category_id);
         $scopes = array_filter([
+            ['category', $category->id],
+            ['bottom_level_category_id', $category->id],
+            ['mid_level_category_id', $category->id],
             ['bottom_level_category_id', $parent?->id],
             ['mid_level_category_id', $parent?->mid_level_category_id],
             ['mid_level_category_id', $category->mid_level_category_id],
@@ -81,7 +90,7 @@ class AssignCategoryImages extends Command
             $products = Products::whereNull('is_delete')
                 ->where($column, $id)
                 ->whereNotNull('image')
-                ->where('image', 'like', 'http%')
+                ->where('image', '!=', '')
                 ->get();
 
             if ($products->isEmpty()) {
@@ -101,15 +110,22 @@ class AssignCategoryImages extends Command
         return null;
     }
 
+    // A product image is either a remote URL or (since imports download product images)
+    // a filename in public/uploads/Product — copy the local file in that case.
     private function download(string $url, string $dir): ?string
     {
-        $context = stream_context_create(['http' => ['timeout' => 20, 'user_agent' => 'Mozilla/5.0']]);
-        $data = @file_get_contents($url, false, $context);
+        if (!preg_match('#^https?://#i', $url)) {
+            $source = public_path('uploads/Product/' . $url);
+            $data   = is_file($source) ? file_get_contents($source) : false;
+        } else {
+            $context = stream_context_create(['http' => ['timeout' => 20, 'user_agent' => 'Mozilla/5.0']]);
+            $data = @file_get_contents($url, false, $context);
+        }
         if (!$data || strlen($data) < 500) {
             return null;
         }
 
-        $ext = strtolower(pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION)) ?: 'jpg';
+        $ext = strtolower(pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION)) ?: 'jpg';
         $name = time() . '_' . uniqid() . '.' . $ext;
         file_put_contents("{$dir}/{$name}", $data);
 

@@ -133,12 +133,23 @@ class JohnBullFileImportJob extends ProductImportJob
 
         $rows = [];
 
+        // Most recent "variable" row seen in file order (across the whole file, not just
+        // this chunk) — only consulted via fallbackParent() when the SKU lookup misses.
+        $lastVariable = null;
+
         foreach ($allRows as $lineNumber => $row) {
             $type = strtolower(trim((string) ($row['product_type'] ?? '')));
 
             // Never itself a purchasable line (Price is always blank) — only indexed
             // above so its "variation" rows can find it.
-            if ($type === 'variable') continue;
+            if ($type === 'variable') {
+                $lastVariable = [
+                    'name'        => trim((string) ($row['item_name'] ?? '')),
+                    'description' => trim((string) ($row['description_html'] ?? '')),
+                    'image'       => trim((string) ($row['image_1'] ?? '')),
+                ];
+                continue;
+            }
 
             if ($lineNumber < $this->startRow || $lineNumber > $this->endRow) {
                 continue;
@@ -159,10 +170,11 @@ class JohnBullFileImportJob extends ProductImportJob
                 $spacePos  = strpos($sku, ' ');
                 $parentSku = $spacePos !== false ? substr($sku, 0, $spacePos) : '';
                 $parent    = $parentSku !== '' ? ($parentBySku[$parentSku] ?? null) : null;
+                $parent  ??= $this->fallbackParent($lastVariable);
 
                 if ($parent !== null) {
                     $groupName = $parent['name'];
-                    $size      = trim(substr($sku, $spacePos + 1));
+                    $size      = $spacePos !== false ? trim(substr($sku, $spacePos + 1)) : '';
                     $desc      = $row['description_html'] !== '' ? $row['description_html'] : $parent['description'];
                     $image     = $row['image_1'] !== '' ? $row['image_1'] : $parent['image'];
                 } else {
@@ -192,6 +204,15 @@ class JohnBullFileImportJob extends ProductImportJob
         }
 
         return $rows;
+    }
+
+    // Parent to use for a "variation" row whose SKU prefix matches no "variable"/"simple"
+    // row. John Bull's file order is unreliable (see readRows()), so by default there is
+    // no fallback and the row imports standalone; subclasses whose files do keep
+    // children directly under their parent can return $lastVariable instead.
+    protected function fallbackParent(?array $lastVariable): ?array
+    {
+        return null;
     }
 
     // A raw CSV export of this file may not be UTF-8 (mirrors Ph7FileImportJob's

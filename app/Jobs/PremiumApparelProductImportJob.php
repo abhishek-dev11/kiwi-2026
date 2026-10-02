@@ -7,6 +7,9 @@ use Illuminate\Support\Facades\Storage;
 
 class PremiumApparelProductImportJob extends ProductImportJob
 {
+    // API sync: keep serving the supplier's image URLs — see ProductImportJob::$downloadProductImages.
+    protected bool $downloadProductImages = false;
+
     // GET /api/products has no page param — it returns the entire active catalogue in
     // one response (confirmed live: 442 products, ~12.4k SKU rows across colours/sizes).
     // Processing that many rows' category/product/variant upserts in one job took ~795s

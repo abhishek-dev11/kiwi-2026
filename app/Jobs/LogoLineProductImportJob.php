@@ -7,6 +7,9 @@ use Illuminate\Support\Facades\Http;
 
 class LogoLineProductImportJob extends ProductImportJob
 {
+    // API sync: keep serving the supplier's image URLs — see ProductImportJob::$downloadProductImages.
+    protected bool $downloadProductImages = false;
+
     // GET /v4/Products has no page param — it returns the entire catalogue in one
     // response (confirmed live: ~960 products, ~7 MB). Combined with the documented
     // per-function rate limit (24 requests/day, 1 per 10-minute window), there is no

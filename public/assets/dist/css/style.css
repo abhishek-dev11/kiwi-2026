@@ -1195,3 +1195,6 @@ a { text-decoration: none;}
 
 .static_page_sec {padding: 3rem 0;}
 .static_page_sec h1.common_heading {font-size: 42px;text-align: center;}
+.price_wrapper p {
+    margin: 0;
+}

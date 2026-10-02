@@ -6,6 +6,9 @@ use Illuminate\Support\Facades\Http;
 
 class FashionBizProductImportJob extends ProductImportJob
 {
+    // API sync: keep serving the supplier's image URLs — see ProductImportJob::$downloadProductImages.
+    protected bool $downloadProductImages = false;
+
     // Safety cap so a mis-detected "more pages" heuristic can never loop forever.
     const MAX_PAGES = 500;
 

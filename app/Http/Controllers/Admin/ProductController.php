@@ -638,7 +638,7 @@ class ProductController extends Controller
             // ── Dispatch one job per chunk directly ───────────────
             $currentLine = 2; // line 1 = header 
 
-            // Supplier 3 (jbswear), 8 (Augmento), 9 (pH7), and 13 (BMV) each upload their
+            // Supplier 3 (jbswear), 8 (Augmento), 9 (pH7), and 12 (BMV) each upload their
             // own native column layout rather than the generic template — their
             // *FileImportJob classes remap those columns before the shared
             // ProductImportJob upsert/category/pricing logic runs.
@@ -649,6 +649,8 @@ class ProductController extends Controller
                 12      => \App\Jobs\BmvFileImportJob::class,
                 13      => \App\Jobs\BannersInkFileImportJob::class,
                 14      => \App\Jobs\JohnBullFileImportJob::class,
+                15      => \App\Jobs\BlundstoneFootwearFileImportJob::class,
+                16      => \App\Jobs\BataFileImportJob::class,
                 default => \App\Jobs\ProductImportJob::class,
             };
 

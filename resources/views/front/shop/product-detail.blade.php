@@ -135,7 +135,7 @@
                                 </div>
                             @else
                                 @if($salePrice != '')
-                                    <h6> ${{ number_format($originalPrice, 2) }} </h6>
+                                    <!-- <h6> ${{ number_format($originalPrice, 2) }} </h6> -->
                                 @endif
                                 <h5><span>$</span>{{ number_format($finalPrice, 2) }} <span class="gst_label">(Excl. GST)</span></h5>
                                 <h6 class="price_gst_incl"><span>$</span>{{ number_format($finalPriceIncl, 2) }} <span class="gst_label">(Incl. GST)</span></h6>
@@ -202,7 +202,8 @@
                                     <span class="variant_error text-danger d-block mt-1"></span>
                                 </div>
 
-                                {{-- VARIANT 2 --}}
+                                {{-- VARIANT 2 (only for products with a second attribute, e.g. Color + Size) --}}
+                                @if( !empty($get_product['sub_variant_attribute_id']) )
                                 <div class="variant_group">
                                     <div class="sizelabel">
                                         <p>{{ $get_product['sub_attribute_title'] }} <span></span></p>
@@ -227,6 +228,7 @@
                                     </div>
                                     <span class="variant_error text-danger d-block mt-1"></span>
                                 </div>
+                                @endif
 
                             </div>
                         @endif

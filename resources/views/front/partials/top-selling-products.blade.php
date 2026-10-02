@@ -76,10 +76,12 @@
                         </div>
 
                         <div class="product_price">
+                            <div class="price_wrapper">
                             @if($rtsSalePrice != '' && $rtsSalePrice < $rtsOriginalPrice)
                                 <p><s>${{ number_format($rtsOriginalPrice, 2) }}</s></p>
                             @endif
                             <h6><span>$</span>{{ number_format($rtsFinalPrice, 2) }}</h6>
+                            </div>
                             @if(Auth::guard('customers')->check())
                                 @if( $rtsProduct->product_type == 'variable' )
                                 <a href="{{ route('product-detail', $rtsProduct->slug) }}">

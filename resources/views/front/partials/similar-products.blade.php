@@ -84,10 +84,12 @@
                         </div>
 
                         <div class="product_price">
-                            @if($spSalePrice != '' && $spSalePrice < $spOriginalPrice)
-                                <p><s>${{ number_format($spOriginalPrice, 2) }}</s></p>
-                            @endif
-                            <h6><span>$</span>{{ number_format($spFinalPrice, 2) }}</h6>
+                            <div class="price_wrapper">
+                                @if($spSalePrice != '' && $spSalePrice < $spOriginalPrice)
+                                    <p><s>${{ number_format($spOriginalPrice, 2) }}</s></p>
+                                @endif
+                                <h6><span>$</span>{{ number_format($spFinalPrice, 2) }}</h6>
+                            </div>
                             @if(Auth::guard('customers')->check())
                                 @if( $spProduct->product_type == 'variable' )
                                 <a href="{{ route('product-detail', $spProduct->slug) }}">
