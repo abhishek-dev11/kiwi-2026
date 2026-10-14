@@ -138,13 +138,7 @@
                                                             @foreach ($get_bottom_categories as $btc_key => $btc_value)
                                                                 @php
                                                                 $get_fourth_categories = App\Models\Categories::whereNull('is_delete')->where('bottom_level_category_id', $btc_value->id)->orderBy('title', 'asc')->get();
-                                                                $product_count = App\Models\Products::where(ConditionQuery())
-                                                                    ->where(function ($query) use ($btc_value) {
-                                                                        $query->where('category', $btc_value->id)
-                                                                            ->orWhere('bottom_level_category_id', $btc_value->id);
-                                                                    })
-                                                                    ->distinct('id')
-                                                                    ->count('id');
+                                                                $product_count = categoryDisplayCount($btc_value);
                                                                 $bottom_active_cls = $btc_value->slug == $get_bottom_category->slug ? 'active' : '';
                                                                 @endphp
                                                                 <li class="{{ $bottom_active_cls }}">
@@ -162,7 +156,7 @@
                                                                         <ul class="child_list {{ $bottom_active_cls ? 'open' : '' }}">
                                                                             @foreach($get_fourth_categories as $fourth_category)
                                                                                 @php
-                                                                                    $fourth_product_count = App\Models\Products::where(ConditionQuery())->where('category', $fourth_category->id)->count();
+                                                                                    $fourth_product_count = categoryDisplayCount($fourth_category);
                                                                                     $fourth_active_cls = isset($get_fourth_category) && $get_fourth_category && $fourth_category->slug == $get_fourth_category->slug ? 'active' : '';
                                                                                 @endphp
                                                                                 <li class="{{ $fourth_active_cls }}">

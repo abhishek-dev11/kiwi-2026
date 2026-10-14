@@ -98,21 +98,13 @@ class ProductController extends Controller
             ? $this->productsForCategory($get_category)
             : collect();
 
-        // Collect all category IDs to batch-count sub-categories
-        $categoryIds = $categories->pluck('id');
-        $countMap    = Categories::whereIn('mid_level_category_id', $categoryIds)
-            ->whereNull('bottom_level_category_id')
-            ->selectRaw('mid_level_category_id, COUNT(*) as total')
-            ->groupBy('mid_level_category_id')
-            ->pluck('total', 'mid_level_category_id');
-
         $categories_list = $categories->map(fn($cat) => [
             'id'          => $cat->id,
             'title'       => $cat->title,
             'parent_slug' => $slug,
             'child_slug'  => $cat->slug,
             'image'       => $cat->image,
-            'count'       => $countMap->get($cat->id, 0) ?: $this->productCountForCategory($cat),
+            'count'       => categoryDisplayCount($cat),
         ])->values()->all();
 
         // Fetch top-level active categories
@@ -154,13 +146,6 @@ class ProductController extends Controller
         //$categories = $categories->paginate(config('adminconfig.records_per_page'));
         $categories = $categories->get();
 
-        // Batch-fetch sub-category counts to avoid N+1
-        $categoryIds    = $categories->pluck('id');
-        $subCountMap    = Categories::whereIn('bottom_level_category_id', $categoryIds)
-            ->selectRaw('bottom_level_category_id, COUNT(*) as total')
-            ->groupBy('bottom_level_category_id')
-            ->pluck('total', 'bottom_level_category_id');
-
         $categories_list = $categories->map(fn($cat) => [
             'id'             => $cat->id,
             'title'          => $cat->title,
@@ -168,7 +153,7 @@ class ProductController extends Controller
             'child_slug'     => $child_slug,
             'sub_child_slug' => $cat->slug,
             'image'          => $cat->image,
-            'count'          => $subCountMap->get($cat->id, 0) ?: $this->productCountForCategory($cat),
+            'count'          => categoryDisplayCount($cat),
         ])->values()->all();
 
         $show_products = $categories->count() === 0;
@@ -234,24 +219,6 @@ class ProductController extends Controller
             ->paginate(config('adminconfig.records_per_page'));
     }
 
-    private function productCountForCategory(Categories $category): int
-    {
-        return Products::where(ConditionQuery())
-            ->where(function ($query) use ($category) {
-                $query->where('category', $category->id);
-
-                if (is_null($category->top_level_category_id) && is_null($category->mid_level_category_id)) {
-                    $query->orWhere('top_level_category_id', $category->id);
-                } elseif (is_null($category->mid_level_category_id)) {
-                    $query->orWhere('mid_level_category_id', $category->id);
-                } elseif (is_null($category->bottom_level_category_id)) {
-                    $query->orWhere('bottom_level_category_id', $category->id);
-                }
-            })
-            ->distinct('id')
-            ->count('id');
-    }
-
     private function wishlistedProductIds(): array
     {
         if (!Auth::guard('customers')->check()) {
@@ -315,7 +282,7 @@ class ProductController extends Controller
                 'sub_child_slug' => $sub_child_slug,
                 'fourth_slug'    => $cat->slug,
                 'image'          => $cat->image,
-                'count'          => $this->productCountForCategory($cat),
+                'count'          => categoryDisplayCount($cat),
             ])->values()->all();
         }
 

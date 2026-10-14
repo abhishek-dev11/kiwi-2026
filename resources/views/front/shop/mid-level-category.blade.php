@@ -82,7 +82,7 @@
                                                     <ul class="child_list">
                                                         @foreach ($get_bottom_categories as $btc_key => $btc_value)
                                                             @php
-                                                            $product_count = App\Models\Products::where(ConditionQuery())->where('category', $btc_value->id)->count();
+                                                            $product_count = categoryDisplayCount($btc_value);
                                                             @endphp
                                                             <li class="active">
                                                                 <a href="{{ route('products', 

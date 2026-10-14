@@ -763,6 +763,45 @@ if (!function_exists('ConditionQuery')) {
     }
 }
 
+// Number of items a visitor sees after clicking a category:
+// its sub-categories when it has any, otherwise its products.
+if (!function_exists('categoryDisplayCount')) {
+    function categoryDisplayCount(Categories $category): int
+    {
+        $children = Categories::whereNull('is_delete');
+
+        if (is_null($category->top_level_category_id)) {
+            $children->where('top_level_category_id', $category->id)->whereNull('mid_level_category_id');
+        } elseif (is_null($category->mid_level_category_id)) {
+            $children->where('mid_level_category_id', $category->id)->whereNull('bottom_level_category_id');
+        } elseif (is_null($category->bottom_level_category_id)) {
+            $children->where('bottom_level_category_id', $category->id);
+        } else {
+            $children = null;
+        }
+
+        $childCount = $children ? $children->count() : 0;
+        if ($childCount > 0) {
+            return $childCount;
+        }
+
+        return Products::where(ConditionQuery())
+            ->where(function ($query) use ($category) {
+                $query->where('category', $category->id);
+
+                if (is_null($category->top_level_category_id)) {
+                    $query->orWhere('top_level_category_id', $category->id);
+                } elseif (is_null($category->mid_level_category_id)) {
+                    $query->orWhere('mid_level_category_id', $category->id);
+                } elseif (is_null($category->bottom_level_category_id)) {
+                    $query->orWhere('bottom_level_category_id', $category->id);
+                }
+            })
+            ->distinct('id')
+            ->count('id');
+    }
+}
+
 if (!function_exists('get_date_format')) {
     function get_date_format($date){
         $date = date("Y-m-d H:i:s",strtotime($date));
