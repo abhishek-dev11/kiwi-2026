@@ -116,7 +116,11 @@
                                     <span class="d-none d-sm-inline-block">{{ translate('Add New') }}</span>
                                 </span>
                             </a>
-                            
+                            {{-- Total across all pages, for the current filters --}}
+                            <span class="btn btn-outline-secondary float-end me-2 pe-none">
+                                {{ translate('Total Products') }} :       <strong> {{ number_format($products->total()) }}</strong>
+                            </span>
+
                         </div>
                     </div>
                 </div>

@@ -658,6 +658,7 @@ class ProductController extends Controller
                 17      => \App\Jobs\FoxAndGunnFileImportJob::class,
                 18      => \App\Jobs\MobelWholesaleFileImportJob::class,
                 19      => \App\Jobs\PortwestFileImportJob::class,
+                20      => \App\Jobs\LynnRiverFileImportJob::class,
                 default => \App\Jobs\ProductImportJob::class,
             };
 
