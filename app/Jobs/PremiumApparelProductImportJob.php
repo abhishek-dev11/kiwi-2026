@@ -10,6 +10,9 @@ class PremiumApparelProductImportJob extends ProductImportJob
     // API sync: keep serving the supplier's image URLs — see ProductImportJob::$downloadProductImages.
     protected bool $downloadProductImages = false;
 
+    // Pages chain themselves from readRows() (not safe to re-run) — no queue retries.
+    public $tries = 1;
+
     // GET /api/products has no page param — it returns the entire active catalogue in
     // one response (confirmed live: 442 products, ~12.4k SKU rows across colours/sizes).
     // Processing that many rows' category/product/variant upserts in one job took ~795s

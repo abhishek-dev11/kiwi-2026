@@ -9,6 +9,9 @@ class FashionBizProductImportJob extends ProductImportJob
     // API sync: keep serving the supplier's image URLs — see ProductImportJob::$downloadProductImages.
     protected bool $downloadProductImages = false;
 
+    // Pages chain themselves from readRows() (not safe to re-run) — no queue retries.
+    public $tries = 1;
+
     // Safety cap so a mis-detected "more pages" heuristic can never loop forever.
     const MAX_PAGES = 500;
 

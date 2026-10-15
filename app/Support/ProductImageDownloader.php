@@ -1,0 +1,210 @@
+<?php
+
+namespace App\Support;
+
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+
+// Downloads product images into public/uploads/Product for the file imports and the
+// products:fetch-images command.
+//  - URLs are fetched concurrently (prefetch()), not one blocking request per product.
+//  - The local filename is derived from the URL, so a URL that is already on disk is
+//    never downloaded twice, across products, chunks and imports.
+//  - A host that keeps failing to connect (down / blocked) is skipped for a cool-down
+//    period, so an unreachable supplier site can't stall every product of an import.
+//  - Failures are classified: "transient" (connection error, timeout, 5xx, 429) may
+//    succeed later, "permanent" (404, not an image, ...) won't.
+class ProductImageDownloader
+{
+    const STORAGE_PATH       = 'uploads/Product';
+    const POOL_SIZE          = 20;
+    const HOST_TRIP_AFTER    = 3;    // consecutive connection failures before a host is skipped
+    const HOST_COOLDOWN_MIN  = 10;
+    const MIN_IMAGE_BYTES    = 100;
+
+    // url => local filename | null
+    protected array $results = [];
+    // url => true when the failure may be temporary
+    protected array $transient = [];
+    protected array $hostStreak = [];
+    protected array $hostDown = [];
+
+    public function download(string $url): ?string
+    {
+        $this->prefetch([$url]);
+
+        return $this->results[$url] ?? null;
+    }
+
+    // True when the last download() / prefetch() of $url failed for a reason that may go
+    // away on its own (host unreachable, timeout, 5xx) — worth retrying later.
+    public function failedTransiently(string $url): bool
+    {
+        return ($this->results[$url] ?? null) === null && ($this->transient[$url] ?? false);
+    }
+
+    public function prefetch(array $urls): void
+    {
+        $dir = public_path(self::STORAGE_PATH);
+        if (!is_dir($dir)) @mkdir($dir, 0755, true);
+
+        $pending = [];
+        foreach (array_unique($urls) as $url) {
+            $url = trim((string) $url);
+            if ($url === '' || array_key_exists($url, $this->results)) continue;
+
+            if (!preg_match('#^https?://#i', $url)) {
+                $this->results[$url] = null;
+                continue;
+            }
+
+            // Already downloaded by an earlier import of the same URL.
+            $existing = glob($dir . '/' . $this->baseName($url) . '.*');
+            if (!empty($existing)) {
+                $this->results[$url] = basename($existing[0]);
+                continue;
+            }
+
+            if ($this->isHostDown($url)) {
+                $this->results[$url]   = null;
+                $this->transient[$url] = true;
+                continue;
+            }
+
+            $pending[] = $url;
+        }
+
+        foreach (array_chunk($pending, self::POOL_SIZE) as $batch) {
+            // The host may have tripped during an earlier batch of this call.
+            $batch = array_values(array_filter($batch, function ($url) {
+                if (!$this->isHostDown($url)) return true;
+                $this->results[$url]   = null;
+                $this->transient[$url] = true;
+                return false;
+            }));
+            if (empty($batch)) continue;
+
+            try {
+                $responses = Http::pool(function ($pool) use ($batch) {
+                    foreach ($batch as $url) {
+                        $pool->as($url)
+                            ->timeout(20)
+                            ->connectTimeout(5)
+                            ->withUserAgent('Mozilla/5.0 (compatible; ProductImporter/1.0)')
+                            ->get($url);
+                    }
+                });
+            } catch (\Throwable $e) {
+                \Log::warning('ImageDownloader: pool failed: ' . $e->getMessage());
+                foreach ($batch as $url) {
+                    $this->results[$url]   = null;
+                    $this->transient[$url] = true;
+                }
+                continue;
+            }
+
+            foreach ($batch as $url) {
+                $this->handleResponse($url, $responses[$url] ?? null);
+            }
+        }
+    }
+
+    // For callers that fetch an image themselves (category images): skip a host that has
+    // been failing, and report each result so the shared circuit breaker keeps count.
+    public function hostIsSkipped(string $url): bool
+    {
+        return $this->isHostDown($url);
+    }
+
+    public function reportHostResult(string $url, bool $reachable): void
+    {
+        $this->noteHost($url, $reachable);
+    }
+
+    protected function handleResponse(string $url, $response): void
+    {
+        $this->results[$url] = null;
+
+        if (!$response instanceof Response) {
+            // Connection error / timeout.
+            $this->transient[$url] = true;
+            $this->noteHost($url, false);
+            \Log::warning("ImageDownloader: {$url} unreachable: " . ($response instanceof \Throwable ? $response->getMessage() : 'no response'));
+            return;
+        }
+
+        $this->noteHost($url, true);
+
+        if (!$response->successful()) {
+            $status = $response->status();
+            $this->transient[$url] = $status >= 500 || in_array($status, [408, 429], true);
+            \Log::warning("ImageDownloader: HTTP {$status} — {$url}");
+            return;
+        }
+
+        $data = $response->body();
+        $info = strlen($data) >= self::MIN_IMAGE_BYTES ? @getimagesizefromstring($data) : false;
+        $ext  = $info ? (image_type_to_extension($info[2], false) ?: null) : null;
+
+        if (!$ext) {
+            $this->transient[$url] = false;
+            \Log::warning("ImageDownloader: not a valid image — {$url}");
+            return;
+        }
+
+        $fileName = $this->baseName($url) . '.' . ($ext === 'jpeg' ? 'jpg' : $ext);
+        $path     = public_path(self::STORAGE_PATH . '/' . $fileName);
+
+        // Write to a temp file first so a crash can't leave a truncated image that the
+        // "already on disk" check would later accept.
+        $tmp = $path . '.part';
+        if (@file_put_contents($tmp, $data) === false || !@rename($tmp, $path)) {
+            @unlink($tmp);
+            $this->transient[$url] = true;
+            \Log::warning("ImageDownloader: could not write {$fileName}");
+            return;
+        }
+
+        $this->results[$url] = $fileName;
+    }
+
+    protected function baseName(string $url): string
+    {
+        $name = pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_FILENAME);
+        $name = trim(preg_replace('/[^A-Za-z0-9_-]+/', '-', $name), '-') ?: 'product';
+
+        return substr($name, 0, 80) . '_' . substr(md5($url), 0, 10);
+    }
+
+    // ── Host circuit breaker ───────────────────────────────
+    protected function hostKey(string $url): string
+    {
+        return 'import_image_host_down_' . md5(strtolower((string) parse_url($url, PHP_URL_HOST)));
+    }
+
+    protected function isHostDown(string $url): bool
+    {
+        $key = $this->hostKey($url);
+
+        return $this->hostDown[$key] ??= Cache::has($key);
+    }
+
+    protected function noteHost(string $url, bool $reachable): void
+    {
+        $key = $this->hostKey($url);
+
+        if ($reachable) {
+            $this->hostStreak[$key] = 0;
+            return;
+        }
+
+        $this->hostStreak[$key] = ($this->hostStreak[$key] ?? 0) + 1;
+
+        if ($this->hostStreak[$key] >= self::HOST_TRIP_AFTER && empty($this->hostDown[$key])) {
+            $this->hostDown[$key] = true;
+            Cache::put($key, true, now()->addMinutes(self::HOST_COOLDOWN_MIN));
+            \Log::warning('ImageDownloader: host ' . parse_url($url, PHP_URL_HOST) . ' unreachable — skipping its images for ' . self::HOST_COOLDOWN_MIN . ' min');
+        }
+    }
+}

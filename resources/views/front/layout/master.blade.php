@@ -24,6 +24,47 @@
     <link rel="stylesheet" href="{{ asset('assets/dist/css/style.css') }}">
     <link rel="stylesheet" href="{{ asset('assets/dist/css/responsive.css') }}">
 
+    {{-- Product image fallback: any product image that fails to load (dead / invalid / blocked
+         supplier URL, missing local file) is swapped for the default placeholder. Product
+         images are the ones served from the product upload folders or from another origin
+         (supplier URLs). Runs for every <img> on the page, including ones added later by
+         JavaScript (sliders, ajax lists), without touching layout or the individual templates. --}}
+    <script>
+        (function () {
+            var placeholder = @json(asset('placeholder/product/image.png'));
+            var localFolders = /\/uploads\/(Product|ProductGallery|ProductVariant)\//i;
+
+            function isProductImage(src) {
+                if (!src || src === placeholder) return false;
+                if (localFolders.test(src)) return true;
+                try {
+                    var u = new URL(src, location.href);
+                    return /^https?:$/.test(u.protocol) && u.origin !== location.origin;
+                } catch (e) { return false; }
+            }
+
+            function useFallback(img) {
+                var src = img.currentSrc || img.getAttribute('src') || '';
+                if (img.dataset.imgFallback || !isProductImage(src)) return;
+                img.dataset.imgFallback = '1';   // only once per image — no error loop
+                img.removeAttribute('srcset');
+                img.src = placeholder;
+            }
+
+            // 'error' doesn't bubble, so listen in the capture phase on the document.
+            document.addEventListener('error', function (e) {
+                if (e.target && e.target.tagName === 'IMG') useFallback(e.target);
+            }, true);
+
+            // Images that had already failed before this ran (e.g. restored from cache).
+            window.addEventListener('load', function () {
+                document.querySelectorAll('img').forEach(function (img) {
+                    if (img.complete && img.naturalWidth === 0) useFallback(img);
+                });
+            });
+        })();
+    </script>
+
 </head>
 
 <body>

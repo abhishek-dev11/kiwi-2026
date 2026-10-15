@@ -18,6 +18,7 @@ use App\Models\ProductVariantImages;
 use App\Models\ProductSubVariants;
 use App\Models\ProducSubtVariantItems;
 use App\Models\Categories;
+use App\Support\ProductImageDownloader;
 use App\Support\ProductTextCleaner;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
@@ -25,9 +26,17 @@ class ProductImportJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $timeout = 600;
-    public $tries   = 1;      // no retries during debug
-    public $backoff = 10;
+    // A chunk is retried (with backoff) before it is reported as failed. A retry is safe:
+    // products are upserted by title + supplier, and a chunk already recorded as done in
+    // the import's ledger (see recordChunk()) is skipped.
+    public $timeout       = 900;
+    public $tries         = 3;
+    public $failOnTimeout = true;
+
+    public function backoff(): array
+    {
+        return [15, 60];
+    }
 
     protected string $path;
     protected string $importId;
@@ -46,6 +55,11 @@ class ProductImportJob implements ShouldQueue
     // products.image_url). The API-sync subclasses turn this off — they sync thousands
     // of products per run and keep serving the supplier's own image URLs.
     protected bool $downloadProductImages = true;
+
+    // When not downloading (API jobs): true checks that each URL is reachable before storing
+    // it (blank if not). A job can turn this off to store the URL as given, with no request
+    // to the supplier — see FoxAndGunnFileImportJob.
+    protected bool $verifyImageUrls = true;
 
     // Remote URL -> local filename (or null on failure) for this job run, so a URL shared
     // by several colour groups / products is only fetched once.
@@ -80,7 +94,14 @@ class ProductImportJob implements ShouldQueue
         // than PHP's max_execution_time, which would kill the chunk mid-way.
         @set_time_limit(0);
 
-        \Log::info("=== ImportJob START [{$this->importId}] lines {$this->startRow}-{$this->endRow} ===");
+        // Redelivered after it already finished (e.g. a worker died after the last write) —
+        // don't process or count it twice.
+        if ($this->chunkState() === 'done') {
+            \Log::info("ImportJob [{$this->importId}]: lines {$this->startRow}-{$this->endRow} already done — skipping");
+            return;
+        }
+
+        \Log::info("=== ImportJob START [{$this->importId}] lines {$this->startRow}-{$this->endRow} (attempt {$this->attempts()}) ===");
 
         try {
             // ── 1. Read assigned rows ─────────────────────────
@@ -90,7 +111,7 @@ class ProductImportJob implements ShouldQueue
 
             if (empty($rows)) {
                 \Log::warning("ImportJob [{$this->importId}]: No rows — skipping chunk");
-                $this->updateProgress(0);
+                $this->recordChunk('done', 0);
                 return;
             }
 
@@ -117,7 +138,7 @@ class ProductImportJob implements ShouldQueue
             unset($rows, $topCategoryCache, $midCategoryCache, $bottomCategoryCache, $fourthCategoryCache, $attributeCache);
             gc_collect_cycles();
 
-            $this->updateProgress($actualRowCount);
+            $this->recordChunk('done', $actualRowCount);
 
             \Log::info("=== ImportJob DONE [{$this->importId}] lines {$this->startRow}-{$this->endRow} | rows: {$actualRowCount} ===");
 
@@ -127,7 +148,12 @@ class ProductImportJob implements ShouldQueue
             \Log::error("File    : " . $e->getFile() . ":" . $e->getLine());
             \Log::error("Trace   : " . $e->getTraceAsString());
 
-            $this->markFailed();
+            // On a queue worker the chunk is retried first (failed() records it once every
+            // attempt is used up). With nothing to retry it — run inline / after the
+            // response, or the last attempt — record it now.
+            if ($this->isFinalAttempt()) {
+                $this->recordChunk('failed', 0, $e->getMessage());
+            }
             throw $e;
         }
     }
@@ -430,7 +456,19 @@ class ProductImportJob implements ShouldQueue
 
         // API imports: check every product image URL in this chunk up front, concurrently,
         // instead of one blocking request per product inside the loop below.
-        if (!$this->downloadProductImages) {
+        $fileImportUrls = [];
+        if ($this->downloadProductImages) {
+            // File imports: download the chunk's product images concurrently up front.
+            foreach ($grouped as $colorGroups) {
+                foreach ($colorGroups as $productItems) {
+                    $url = trim((string) ($productItems[0]['product_image'] ?? ''));
+                    if (preg_match('#^https?://#i', $url)) $fileImportUrls[] = $url;
+                }
+            }
+            $this->imageDownloader()->prefetch($fileImportUrls);
+        }
+
+        if (!$this->downloadProductImages && $this->verifyImageUrls) {
             $urls = [];
             foreach ($grouped as $colorGroups) {
                 foreach ($colorGroups as $productItems) {
@@ -654,7 +692,19 @@ class ProductImportJob implements ShouldQueue
 
         $value = $this->downloadProductImages
             ? $this->downloadProductImage($image)
-            : ($this->isImageUrlAccessible($image) ? $image : null);
+            : (!$this->verifyImageUrls || $this->isImageUrlAccessible($image) ? $image : null);
+
+        // A download that failed for a temporary reason (supplier site down / timing out)
+        // keeps the URL so products:fetch-images can fill the image in later, and never
+        // wipes an image the product already has. A permanent failure (404, not an image)
+        // leaves both columns empty, as before.
+        if ($value === null && $this->downloadProductImages && $this->imageDownloader()->failedTransiently($image)) {
+            if (empty($product->image)) {
+                $product->image     = null;
+                $product->image_url = $image;
+            }
+            return;
+        }
 
         $product->image     = $value;
         $product->image_url = $value !== null ? $image : null;
@@ -769,56 +819,17 @@ class ProductImportJob implements ShouldQueue
     }
 
     // Returns the local filename inside IMAGE_STORAGE_PATH, or null on any failure.
-    // The filename is derived from the URL, so re-importing the same file reuses the
-    // image already on disk instead of downloading it again.
+    // See ProductImageDownloader: concurrent, de-duplicated by URL, skips dead hosts.
     protected function downloadProductImage(string $url): ?string
     {
-        if (array_key_exists($url, $this->downloadedImages)) {
-            return $this->downloadedImages[$url];
-        }
+        return $this->imageDownloader()->download($url);
+    }
 
-        $this->downloadedImages[$url] = null;
+    protected ?ProductImageDownloader $imageDownloaderInstance = null;
 
-        try {
-            $dir = public_path(self::IMAGE_STORAGE_PATH);
-            if (!is_dir($dir)) mkdir($dir, 0755, true);
-
-            $baseName = pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_FILENAME);
-            $baseName = trim(preg_replace('/[^A-Za-z0-9_-]+/', '-', $baseName), '-') ?: 'product';
-            $baseName = substr($baseName, 0, 80) . '_' . substr(md5($url), 0, 10);
-
-            // Already downloaded by an earlier import of the same URL.
-            foreach (glob("{$dir}/{$baseName}.*") ?: [] as $existing) {
-                return $this->downloadedImages[$url] = basename($existing);
-            }
-
-            $response = Http::timeout(20)
-                ->connectTimeout(10)
-                ->withUserAgent('Mozilla/5.0 (compatible; ProductImporter/1.0)')
-                ->get($url);
-
-            if (!$response->successful()) {
-                \Log::warning("ImportJob: product image HTTP {$response->status()} — {$url}");
-                return null;
-            }
-
-            $data = $response->body();
-            $info = $data !== '' ? @getimagesizefromstring($data) : false;
-            $ext  = $info ? (image_type_to_extension($info[2], false) ?: null) : null;
-
-            if (!$ext) {
-                \Log::warning("ImportJob: product image is not a valid image — {$url}");
-                return null;
-            }
-
-            $fileName = "{$baseName}." . ($ext === 'jpeg' ? 'jpg' : $ext);
-            file_put_contents("{$dir}/{$fileName}", $data);
-
-            return $this->downloadedImages[$url] = $fileName;
-        } catch (\Throwable $e) {
-            \Log::warning("ImportJob: product image download failed [{$url}]: " . $e->getMessage());
-            return null;
-        }
+    protected function imageDownloader(): ProductImageDownloader
+    {
+        return $this->imageDownloaderInstance ??= new ProductImageDownloader();
     }
 
     // =========================================================
@@ -1127,9 +1138,14 @@ class ProductImportJob implements ShouldQueue
         if (!is_dir($dir)) mkdir($dir, 0777, true);
 
         if (preg_match('#^https?://#i', $image)) {
+            // A supplier host that keeps failing is skipped (for a few minutes, across
+            // chunks) instead of costing a timeout for every product of the import.
+            if ($this->imageDownloader()->hostIsSkipped($image)) return null;
+
             $data = @file_get_contents($image, false, stream_context_create(
                 ['http' => ['timeout' => 20, 'user_agent' => 'Mozilla/5.0']]
             ));
+            $this->imageDownloader()->reportHostResult($image, $data !== false);
             if (!$data || strlen($data) < 500) return null;
             $ext = strtolower(pathinfo(parse_url($image, PHP_URL_PATH), PATHINFO_EXTENSION)) ?: 'jpg';
         } else {
@@ -1264,7 +1280,21 @@ class ProductImportJob implements ShouldQueue
         return implode('-', array_filter($slugParts));
     }
  
-    protected function updateProgress(int $rowCount): void
+    // ── Import ledger ──────────────────────────────────────
+    // import_meta_{id}['chunks'] maps each chunk (by its first line) to 'done' | 'failed'.
+    // Progress is derived from it, so a retried or redelivered chunk is never counted
+    // twice, and a failed chunk that later succeeds (queue:retry) flips to done while the
+    // chunks that already succeeded are left alone.
+    const META_TTL_HOURS = 24;
+
+    protected function chunkState(): ?string
+    {
+        $meta = cache()->get("import_meta_{$this->importId}");
+
+        return $meta['chunks'][$this->startRow]['state'] ?? null;
+    }
+
+    protected function recordChunk(string $state, int $rowCount = 0, string $error = ''): void
     {
         $metaKey = "import_meta_{$this->importId}";
         // Lock TTL 15 s — long enough to outlast a slow cache write but short
@@ -1273,7 +1303,7 @@ class ProductImportJob implements ShouldQueue
 
         try {
             // 30 s wait — covers the full 15 s TTL of a stale lock left by a
-            // crashed worker, plus a margin for file-cache latency on Windows.
+            // crashed worker, plus a margin for cache latency on Windows.
             $lock->block(30);
 
             $meta = cache()->get($metaKey);
@@ -1283,22 +1313,35 @@ class ProductImportJob implements ShouldQueue
                 return;
             }
 
-            $meta['processed_rows']   = (int)($meta['processed_rows']   ?? 0) + $rowCount;
-            $meta['completed_chunks'] = (int)($meta['completed_chunks'] ?? 0) + 1;
+            $meta['chunks'][$this->startRow] = [
+                'state' => $state,
+                'rows'  => $rowCount,
+                'error' => mb_substr($error, 0, 300),
+            ];
 
-            $totalChunks     = (int)($meta['total_chunks'] ?? 1);
-            $completedChunks = (int) $meta['completed_chunks'];
+            $chunks    = $meta['chunks'];
+            $done      = count(array_filter($chunks, fn($c) => $c['state'] === 'done'));
+            $failed    = count(array_filter($chunks, fn($c) => $c['state'] === 'failed'));
+            $total     = max(1, (int) ($meta['total_chunks'] ?? 1));
 
-            if ($completedChunks >= $totalChunks) {
-                $meta['status']     = 'completed';
-                $meta['percentage'] = 100;
+            $meta['completed_chunks'] = $done;
+            $meta['failed_chunks']    = $failed;
+            $meta['processed_rows']   = array_sum(array_map(fn($c) => $c['state'] === 'done' ? (int) $c['rows'] : 0, $chunks));
+            $meta['percentage']       = min(100, (int) round(($done / $total) * 100));
+
+            if ($done >= $total) {
+                $meta['status'] = 'completed';
+            } elseif ($done + $failed >= $total) {
+                // Every chunk has finished but some failed — retry them with
+                // `php artisan queue:retry all`; only those chunks are re-run.
+                $meta['status'] = 'failed';
             } else {
-                $meta['percentage'] = (int) round(($completedChunks / $totalChunks) * 100);
+                $meta['status'] = 'processing';
             }
 
-            cache()->put($metaKey, $meta, now()->addHours(3));
+            cache()->put($metaKey, $meta, now()->addHours(self::META_TTL_HOURS));
 
-            \Log::info("Progress [{$this->importId}]: chunk {$completedChunks}/{$totalChunks} = {$meta['percentage']}%");
+            \Log::info("Progress [{$this->importId}]: {$done} done, {$failed} failed of {$total} chunks = {$meta['percentage']}%");
 
         } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
             \Log::warning("ImportJob: Could not acquire progress lock [{$this->importId}]: " . $e->getMessage());
@@ -1307,21 +1350,17 @@ class ProductImportJob implements ShouldQueue
         }
     }
 
-    // =========================================================
-    protected function markFailed(): void
+    protected function isFinalAttempt(): bool
     {
-        $key  = "import_meta_{$this->importId}";
-        $meta = cache()->get($key, []);
-        if (!empty($meta)) {
-            $meta['status'] = 'failed';
-            cache()->put($key, $meta, now()->addHours(3));
-        }
+        return $this->job === null
+            || $this->job instanceof \Illuminate\Queue\Jobs\SyncJob
+            || $this->attempts() >= $this->tries;
     }
 
+    // Called by the queue once every attempt of this chunk has failed.
     public function failed(\Throwable $e): void
     {
-        \Log::error("ImportJob FAILED [{$this->importId}]: " . $e->getMessage());
-        $this->markFailed();
+        \Log::error("ImportJob FAILED [{$this->importId}] lines {$this->startRow}-{$this->endRow}: " . $e->getMessage());
+        $this->recordChunk('failed', 0, $e->getMessage());
     }
-
 }

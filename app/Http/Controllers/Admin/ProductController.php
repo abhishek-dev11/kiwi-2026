@@ -615,10 +615,13 @@ class ProductController extends Controller
             $supplierId = (int) $request->supplier_id;
 
             // ── Count valid rows first (fast operation) ──────────
-            $rowCount = $this->countImportRows($path);
+            $counts   = $this->countImportRows($path);
+            $rowCount = $counts['rows'];
 
-            $chunkSize   = 500;
-            $totalChunks = max(1, (int) ceil($rowCount / $chunkSize));
+            // Chunks are sized from the file's last line (not just the non-empty rows), so a
+            // file with blank lines in the middle can't lose its tail rows.
+            $chunkSize   = max(50, (int) config('import.chunk_size', 250));
+            $totalChunks = max(1, (int) ceil(max($counts['lines'] - 1, $rowCount) / $chunkSize));
 
             // ── Store accurate meta BEFORE dispatching ────────────
             cache()->put("import_meta_{$importId}", [
@@ -628,7 +631,8 @@ class ProductController extends Controller
                 'total_rows'       => $rowCount,
                 'processed_rows'   => 0,
                 'percentage'       => 0,
-            ], now()->addHours(3));
+                'chunks'           => [],
+            ], now()->addHours(\App\Jobs\ProductImportJob::META_TTL_HOURS));
 
             // cache()->put("import_chunks_{$importId}", 0, now()->addHours(3));
             // cache()->put("import_rows_{$importId}", 0, now()->addHours(3));
@@ -651,6 +655,7 @@ class ProductController extends Controller
                 14      => \App\Jobs\JohnBullFileImportJob::class,
                 15      => \App\Jobs\BlundstoneFootwearFileImportJob::class,
                 16      => \App\Jobs\BataFileImportJob::class,
+                17      => \App\Jobs\FoxAndGunnFileImportJob::class,
                 default => \App\Jobs\ProductImportJob::class,
             };
 
@@ -668,14 +673,22 @@ class ProductController extends Controller
                 //     $totalChunks
                 // ))->onQueue('imports');
 
-                dispatch(new $importJobClass(
+                $pending = dispatch(new $importJobClass(
                     $path,
                     $importId,
                     $supplierId,
                     $startRow,
                     $endRow,
                     $totalChunks
-                ))->afterResponse();
+                ));
+
+                // Real queue jobs by default (run by `php artisan queue:work --queue=imports`),
+                // with retries and a per-job timeout. IMPORT_USE_QUEUE=false restores the old
+                // run-inside-the-web-request behaviour.
+                config('import.use_queue', true)
+                    ? $pending->onQueue(config('import.queue', 'imports'))
+                    : $pending->afterResponse();
+                unset($pending); // dispatch now, not when the variable is next reassigned
 
                 $currentLine = $endRow + 1;
 
@@ -694,7 +707,8 @@ class ProductController extends Controller
         return view('admin.product.import', compact('common', 'get_suppliers'));
     }
 
-    private function countImportRows(string $path): int
+    // ['rows' => non-empty data rows, 'lines' => the file's last data line (header = 1)]
+    private function countImportRows(string $path): array
     {
         $filePath = Storage::disk('local')->path($path);
         $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
@@ -702,12 +716,12 @@ class ProductController extends Controller
 
         if ($extension === 'csv') {
             $handle = fopen($filePath, 'r');
-            $isHeader = true;
+            $lines = 0;
 
             while (($row = fgetcsv($handle, 0, ',')) !== false) {
-                if ($isHeader) {
-                    $isHeader = false;
-                    continue;
+                $lines++;
+                if ($lines === 1) {
+                    continue; // header
                 }
 
                 if (!empty($row[0]) || !empty($row[3])) {
@@ -716,12 +730,13 @@ class ProductController extends Controller
             }
 
             fclose($handle);
-            return $rowCount;
+            return ['rows' => $rowCount, 'lines' => $lines];
         }
 
         $reader = IOFactory::createReaderForFile($filePath);
         $reader->setReadDataOnly(true);
-        $sheet = $reader->load($filePath)->getActiveSheet();
+        $spreadsheet = $reader->load($filePath);
+        $sheet = $spreadsheet->getActiveSheet();
         $highestRow = $sheet->getHighestDataRow();
 
         for ($rowNumber = 2; $rowNumber <= $highestRow; $rowNumber++) {
@@ -733,7 +748,9 @@ class ProductController extends Controller
             }
         }
 
-        return $rowCount;
+        $spreadsheet->disconnectWorksheets();
+
+        return ['rows' => $rowCount, 'lines' => $highestRow];
     }
 
     public function import_progress($importId)
@@ -767,9 +784,12 @@ class ProductController extends Controller
             'processed_rows'   => $processedRows,
             'percentage'       => $percentage,
             'done'             => $done,
+            'failed_chunks'    => (int) ($meta['failed_chunks'] ?? 0),
             'message'          => $done
                 ? "Completed! {$processedRows} rows imported."
-                : "Chunk {$completedChunks} of {$totalChunks} completed ({$percentage}%)",
+                : (!empty($meta['failed_chunks'])
+                    ? "Chunk {$completedChunks} of {$totalChunks} completed, " . (int) $meta['failed_chunks'] . " failed — fix the cause and run: php artisan queue:retry all"
+                    : "Chunk {$completedChunks} of {$totalChunks} completed ({$percentage}%)"),
         ]);
     }
 
