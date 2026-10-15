@@ -3,16 +3,17 @@
 namespace App\Jobs;
 
 use App\Support\ProductTextCleaner;
+use App\Jobs\Concerns\ScansImportFile;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Storage;
-use PhpOffice\PhpSpreadsheet\IOFactory;
 
-class ModelWholesaleFileImportJob extends ProductImportJob
+class MobelWholesaleFileImportJob extends ProductImportJob
 {
+    use ScansImportFile;
+
     // The file has no stock/quantity column — 99 is the agreed in-stock default.
     protected int $defaultQuantity = 99;
 
-    // Model Wholesale's own column headers -> the canonical keys ProductImportJob::groupRows()
+    // Mobel Wholesale's own column headers -> the canonical keys ProductImportJob::groupRows()
     // reads. "SKU", "Group Name", "Description", "My Price", "Main Category", "Sub Sub Sub
     // Category" and "Image 1".."Image 3" (main image + gallery) already slugify to the
     // canonical keys — no rename needed. The product images are downloaded into
@@ -42,7 +43,7 @@ class ModelWholesaleFileImportJob extends ProductImportJob
         // The whole-file scan is done once per import and cached (a product's rows can land
         // in different chunks, so a chunk can't work this out from its own rows).
         $index = Cache::remember(
-            "import_mw_index_{$this->importId}",
+            "import_mobel_index_{$this->importId}",
             now()->addHours(24),
             fn() => $this->buildIndex()
         );
@@ -125,40 +126,5 @@ class ModelWholesaleFileImportJob extends ProductImportJob
         }
 
         return ['groups' => $groups, 'dupSkus' => $dupSkus];
-    }
-
-    // Every data row of the file as a header-keyed array (CSV or XLSX).
-    protected function scanRows(): \Generator
-    {
-        if (!Storage::disk('local')->exists($this->path)) {
-            return;
-        }
-
-        $filePath = Storage::disk('local')->path($this->path);
-
-        if (strtolower(pathinfo($filePath, PATHINFO_EXTENSION)) === 'csv') {
-            $handle = fopen($filePath, 'r');
-            if (!$handle) return;
-
-            $headers = $this->normalizeHeaders((array) fgetcsv($handle, 0, ','));
-            while (($raw = fgetcsv($handle, 0, ',')) !== false) {
-                yield $this->mapRowToHeaders($headers, $raw);
-            }
-            fclose($handle);
-            return;
-        }
-
-        $reader = IOFactory::createReaderForFile($filePath);
-        $reader->setReadDataOnly(true);
-        $spreadsheet = $reader->load($filePath);
-        $sheet       = $spreadsheet->getActiveSheet();
-        $last        = $sheet->getHighestDataColumn();
-        $headers     = $this->normalizeHeaders($sheet->rangeToArray("A1:{$last}1", null, true, false)[0] ?? []);
-
-        foreach ($sheet->rangeToArray("A2:{$last}" . $sheet->getHighestDataRow(), null, true, false) as $raw) {
-            yield $this->mapRowToHeaders($headers, $raw);
-        }
-
-        $spreadsheet->disconnectWorksheets();
     }
 }
