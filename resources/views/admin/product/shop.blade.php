@@ -106,6 +106,10 @@
                     <div class="entries_div">
                         <strong class="card-title f-18">{{ $common['title'] }}</strong>
                         <div class="number_of_page">
+                            <button type="submit" class="btn btn-danger float-end ms-2">
+                                <i class="bx bx-trash me-sm-1"></i>
+                                <span class="d-none d-sm-inline-block">{{ translate('Delete Selected') }}</span>
+                            </button>
                             <a href="{{ route('admin.products.add') }}" class="dt-button create-new btn btn-primary float-end">
                                 <span>
                                     <i class="bx bx-plus me-sm-1"></i>
@@ -124,6 +128,7 @@
                         <table class="table table-striped table-hover ">
                             <thead>
                                 <tr>
+                                    <th><input type="checkbox" id="selectAll" class="form-check-input"></th>
                                     <th>#</th>
                                     <th>{{ translate('Title') }}</th>
                                     <th>{{ translate('Supplier') }}</th>
@@ -138,6 +143,7 @@
                                 @if ($products->isNotEmpty())
                                     @foreach ($products_list as $key => $value)
                                         <tr>
+                                            <td><input type="checkbox" name="prodcut_ids[]" value="{{ $value['id'] }}" class="form-check-input individual"></td>
                                             <td>{{ $products->firstItem() + $key }}</td>
                                             <td style="word-wrap:break-word;white-space: normal;"><?php echo nl2br($value['title']); ?></td>
                                             <td>{{ $value['supplier_name'] }}</td>
@@ -174,7 +180,7 @@
                                     @endforeach
                                 @else
                                     <tr>
-                                        <td colspan="8" class="text-center">{{ translate('No record Found') }}</td>
+                                        <td colspan="9" class="text-center">{{ translate('No record Found') }}</td>
                                     </tr>
                                 @endif
                             </tbody>

@@ -18,8 +18,8 @@ use Illuminate\Support\Facades\Http;
 class ProductImageDownloader
 {
     const STORAGE_PATH       = 'uploads/Product';
-    const POOL_SIZE          = 20;
-    const HOST_TRIP_AFTER    = 3;    // consecutive connection failures before a host is skipped
+    const POOL_SIZE          = 8;    // concurrent downloads — more makes slow links time out on connect
+    const HOST_TRIP_AFTER    = 3;    // consecutive fully-failed batches before a host is skipped
     const HOST_COOLDOWN_MIN  = 10;
     const MIN_IMAGE_BYTES    = 100;
 
@@ -89,10 +89,10 @@ class ProductImageDownloader
                 $responses = Http::pool(function ($pool) use ($batch) {
                     foreach ($batch as $url) {
                         $pool->as($url)
-                            ->timeout(20)
-                            ->connectTimeout(5)
+                            ->timeout(60)
+                            ->connectTimeout(15)
                             ->withUserAgent('Mozilla/5.0 (compatible; ProductImporter/1.0)')
-                            ->get($url);
+                            ->get($this->fetchUrl($url));
                     }
                 });
             } catch (\Throwable $e) {
@@ -104,8 +104,17 @@ class ProductImageDownloader
                 continue;
             }
 
+            // A host counts as failing only when NOTHING in a batch came back — a few slow or
+            // timed-out requests among successful ones don't mean the host is down.
+            $reached = [];
             foreach ($batch as $url) {
-                $this->handleResponse($url, $responses[$url] ?? null);
+                $response = $responses[$url] ?? null;
+                $this->handleResponse($url, $response);
+                $host = $this->hostKey($url);
+                $reached[$host] = ($reached[$host] ?? false) || $response instanceof Response;
+            }
+            foreach ($reached as $hostKey => $ok) {
+                $this->noteHostKey($hostKey, $ok, $batch[0]);
             }
         }
     }
@@ -119,7 +128,7 @@ class ProductImageDownloader
 
     public function reportHostResult(string $url, bool $reachable): void
     {
-        $this->noteHost($url, $reachable);
+        $this->noteHostKey($this->hostKey($url), $reachable, $url);
     }
 
     protected function handleResponse(string $url, $response): void
@@ -129,12 +138,9 @@ class ProductImageDownloader
         if (!$response instanceof Response) {
             // Connection error / timeout.
             $this->transient[$url] = true;
-            $this->noteHost($url, false);
             \Log::warning("ImageDownloader: {$url} unreachable: " . ($response instanceof \Throwable ? $response->getMessage() : 'no response'));
             return;
         }
-
-        $this->noteHost($url, true);
 
         if (!$response->successful()) {
             $status = $response->status();
@@ -169,6 +175,24 @@ class ProductImageDownloader
         $this->results[$url] = $fileName;
     }
 
+    // The URL actually requested. A Dropbox share link (…?dl=0) answers with an HTML preview
+    // page, not the picture; raw=1 makes Dropbox return the file itself. Results, filenames
+    // and the URL stored in the database all stay keyed on the original link.
+    protected function fetchUrl(string $url): string
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if ($host !== 'dropbox.com' && !str_ends_with($host, '.dropbox.com')) {
+            return $url;
+        }
+
+        $parts = parse_url($url);
+        parse_str($parts['query'] ?? '', $query);
+        unset($query['dl']);
+        $query['raw'] = '1';
+
+        return ($parts['scheme'] ?? 'https') . '://' . $parts['host'] . ($parts['path'] ?? '') . '?' . http_build_query($query);
+    }
+
     protected function baseName(string $url): string
     {
         $name = pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_FILENAME);
@@ -190,10 +214,8 @@ class ProductImageDownloader
         return $this->hostDown[$key] ??= Cache::has($key);
     }
 
-    protected function noteHost(string $url, bool $reachable): void
+    protected function noteHostKey(string $key, bool $reachable, string $sampleUrl): void
     {
-        $key = $this->hostKey($url);
-
         if ($reachable) {
             $this->hostStreak[$key] = 0;
             return;
@@ -204,7 +226,7 @@ class ProductImageDownloader
         if ($this->hostStreak[$key] >= self::HOST_TRIP_AFTER && empty($this->hostDown[$key])) {
             $this->hostDown[$key] = true;
             Cache::put($key, true, now()->addMinutes(self::HOST_COOLDOWN_MIN));
-            \Log::warning('ImageDownloader: host ' . parse_url($url, PHP_URL_HOST) . ' unreachable — skipping its images for ' . self::HOST_COOLDOWN_MIN . ' min');
+            \Log::warning('ImageDownloader: host ' . parse_url($sampleUrl, PHP_URL_HOST) . ' unreachable — skipping its images for ' . self::HOST_COOLDOWN_MIN . ' min');
         }
     }
 }
