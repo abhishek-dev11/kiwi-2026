@@ -234,6 +234,45 @@ abstract class WooCommerceFileImportJob extends ProductImportJob
         return $result;
     }
 
+    // For suppliers that sell several SKUs under one size / colour name (Lynn River:
+    // "57281 L" and "57281 L+"; Knight: "Black Fabric" assembled and knock-down). Every
+    // label shared by more than one SKU of the product gets each SKU's own code — the part
+    // after the parent's SKU ("Large (L+)"), or the whole SKU when the variation SKU doesn't
+    // start with the parent's — so every SKU stays its own variant.
+    protected function labelSizesWithSkuCodes(array $entries): array
+    {
+        $labels = [];
+        foreach ($entries as [$sku, $parentSku, $size]) {
+            $labels[$sku] = $size;
+        }
+
+        foreach ($this->duplicateLabels($labels) as $sku) {
+            [, $parentSku] = $entries[array_search($sku, array_column($entries, 0), true)];
+            $code          = $this->skuCode($parentSku, $sku);
+            $labels[$sku]  = $labels[$sku] . ' (' . ($code !== '' ? $code : $sku) . ')';
+        }
+
+        // Still clashing (the same code under two parent rows of one product).
+        foreach ($this->duplicateLabels($labels) as $sku) {
+            $labels[$sku] = preg_replace('/\([^()]*\)$/', "({$sku})", $labels[$sku]);
+        }
+
+        $result = [];
+        foreach ($entries as [$sku, $parentSku]) {
+            $result[$sku] = [$parentSku, $labels[$sku]];
+        }
+
+        return $result;
+    }
+
+    // SKUs whose label (case-insensitive) is shared with another SKU.
+    protected function duplicateLabels(array $labels): array
+    {
+        $counts = array_count_values(array_map('mb_strtolower', $labels));
+
+        return array_keys(array_filter($labels, fn($label) => $counts[mb_strtolower($label)] > 1));
+    }
+
     // "Baker's Pants White - 4XL" -> "4XL"; falls back to the SKU's suffix
     // ("2208WHR 4XL" -> "4XL") and finally to the whole SKU.
     protected function sizeLabel(array $parent, string $variationName, string $sku): string

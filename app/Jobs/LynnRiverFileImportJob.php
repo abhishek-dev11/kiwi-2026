@@ -21,36 +21,7 @@ class LynnRiverFileImportJob extends WooCommerceFileImportJob
     // "Large (L+X3)"), falling back to the whole SKU, so every SKU stays its own variant.
     protected function labelSizes(array $entries): array
     {
-        $labels = [];
-        foreach ($entries as [$sku, $parentSku, $size]) {
-            $labels[$sku] = $size;
-        }
-
-        foreach ($this->duplicateLabels($labels) as $sku) {
-            [, $parentSku] = $entries[array_search($sku, array_column($entries, 0), true)];
-            $code          = $this->skuCode($parentSku, $sku);
-            $labels[$sku]  = $labels[$sku] . ' (' . ($code !== '' ? $code : $sku) . ')';
-        }
-
-        // Still clashing (the same code under two parent rows of one product).
-        foreach ($this->duplicateLabels($labels) as $sku) {
-            $labels[$sku] = preg_replace('/\([^()]*\)$/', "({$sku})", $labels[$sku]);
-        }
-
-        $result = [];
-        foreach ($entries as [$sku, $parentSku]) {
-            $result[$sku] = [$parentSku, $labels[$sku]];
-        }
-
-        return $result;
-    }
-
-    // SKUs whose label (case-insensitive) is shared with another SKU.
-    protected function duplicateLabels(array $labels): array
-    {
-        $counts = array_count_values(array_map('mb_strtolower', $labels));
-
-        return array_keys(array_filter($labels, fn($label) => $counts[mb_strtolower($label)] > 1));
+        return $this->labelSizesWithSkuCodes($entries);
     }
 
     // A few "simple" rows share one Group Name (e.g. the same safety glasses with a clear,
