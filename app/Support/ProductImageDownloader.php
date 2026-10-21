@@ -178,8 +178,14 @@ class ProductImageDownloader
     // The URL actually requested. A Dropbox share link (…?dl=0) answers with an HTML preview
     // page, not the picture; raw=1 makes Dropbox return the file itself. Results, filenames
     // and the URL stored in the database all stay keyed on the original link.
+    // A Google Drive file link (…/file/d/{id}/view) likewise answers with Drive's viewer
+    // page; uc?export=download returns the file itself.
     protected function fetchUrl(string $url): string
     {
+        if (($driveId = $this->googleDriveFileId($url)) !== null) {
+            return 'https://drive.google.com/uc?export=download&id=' . rawurlencode($driveId);
+        }
+
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
         if ($host !== 'dropbox.com' && !str_ends_with($host, '.dropbox.com')) {
             return $url;
@@ -193,9 +199,31 @@ class ProductImageDownloader
         return ($parts['scheme'] ?? 'https') . '://' . $parts['host'] . ($parts['path'] ?? '') . '?' . http_build_query($query);
     }
 
+    // The file id of a Google Drive file link — …/file/d/{id}/… or …?id={id} — or null.
+    // Folder links (…/drive/folders/…) aren't files and return null.
+    protected function googleDriveFileId(string $url): ?string
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if ($host !== 'drive.google.com' && $host !== 'docs.google.com') {
+            return null;
+        }
+
+        if (preg_match('#/file/d/([A-Za-z0-9_-]+)#', $url, $m)) {
+            return $m[1];
+        }
+
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+        return isset($query['id']) && preg_match('/^[A-Za-z0-9_-]+$/', $query['id']) ? $query['id'] : null;
+    }
+
     protected function baseName(string $url): string
     {
-        $name = pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_FILENAME);
+        // Drive links all end in "/view" — name the file after its Drive id instead.
+        $driveId = $this->googleDriveFileId($url);
+        $name    = $driveId !== null
+            ? 'gdrive-' . $driveId
+            : pathinfo((string) parse_url($url, PHP_URL_PATH), PATHINFO_FILENAME);
         $name = trim(preg_replace('/[^A-Za-z0-9_-]+/', '-', $name), '-') ?: 'product';
 
         return substr($name, 0, 80) . '_' . substr(md5($url), 0, 10);
