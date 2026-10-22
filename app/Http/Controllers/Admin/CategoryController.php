@@ -32,7 +32,7 @@ class CategoryController extends Controller
             $categories->where('status',$common['filter_topcategory_status']);
         }
 
-        $categories  = $categories->paginate(config('adminconfig.records_per_page'));
+        $categories  = $categories->paginate(config('adminconfig.category_records_per_page'));
 
         $categories_list = array();
         foreach ($categories as $key => $value) {
@@ -177,7 +177,7 @@ class CategoryController extends Controller
             $categories->where('status',$common['filter_midcategory_status']);
         }
 
-        $categories  = $categories->paginate(config('adminconfig.records_per_page'));
+        $categories  = $categories->paginate(config('adminconfig.category_records_per_page'));
 
         $categories_list = array();
         foreach ($categories as $key => $value) {
@@ -342,7 +342,7 @@ class CategoryController extends Controller
             $categories->where('status',$common['filter_bottomcategory_status']);
         }
 
-        $categories  = $categories->paginate(config('adminconfig.records_per_page'));
+        $categories  = $categories->paginate(config('adminconfig.category_records_per_page'));
 
         $categories_list = array();
         foreach ($categories as $key => $value) {
@@ -539,7 +539,7 @@ class CategoryController extends Controller
             $categories->where('status', $common['filter_subbottomcategory_status']);
         }
 
-        $categories = $categories->paginate(config('adminconfig.records_per_page'));
+        $categories = $categories->paginate(config('adminconfig.category_records_per_page'));
 
         $categories_list = array();
         foreach ($categories as $key => $value) {

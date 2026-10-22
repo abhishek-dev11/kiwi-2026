@@ -66,6 +66,7 @@
                         <tr>
                             <th>#</th>
                             <th>{{ translate('Title') }}</th>
+                            <th>{{ translate('Image') }}</th>
                             <th>{{ translate('Top Level Category') }}</th>
                             <!-- <th>{{ translate('Sort Number') }}</th> -->
                             <th>{{ translate('Menu') }}</th>
@@ -79,6 +80,7 @@
                                 <tr>
                                     <td>{{ $categories->firstItem() + $key }}</td>
                                     <td>{{ $value['title'] }}</td>
+                                    <td><img src="{{ $value['image'] != '' ? get_image_upload('Category/'.$value['image']) : asset('placeholder/category/image.png') }}" alt="{{ $value['title'] }}" style="width:50px;height:50px;object-fit:cover;border-radius:4px;"></td>
                                     <td>{{ $value['top_level_category'] }}</td>
                                     <!-- <td>{{ ($value['sort_number']) ? $value['sort_number'] : '-' }}</td> -->
                                     <td>{{ ($value['is_menu']==1) ? 'Yes' : 'No' }}</td>
