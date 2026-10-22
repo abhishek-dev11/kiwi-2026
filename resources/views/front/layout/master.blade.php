@@ -425,6 +425,10 @@
                             $('.stock_display').text(response.stock > 0 ? 'In Stock' : 'Out of Stock');
                         }
 
+                        // SHOW THE SELECTED VARIANT'S OWN SKU (FALLS BACK TO THE PRODUCT SKU)
+                        var $sku = $('.sku_display');
+                        $sku.text(response.sku ? response.sku : ($sku.data('default') || ''));
+
                         // DISABLE ADD TO CART / BUY NOW WHEN THE SELECTED COMBINATION
                         // HAS NO STOCK OR NO PRICE
                         var available = (response.stock > 0) && (response.price > 0);

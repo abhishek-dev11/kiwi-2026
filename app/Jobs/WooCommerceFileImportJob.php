@@ -77,6 +77,7 @@ abstract class WooCommerceFileImportJob extends ProductImportJob
             $ownImage  = trim((string) ($row['image_1'] ?? ''));
 
             $row['group_name']  = $family['group'];
+            $row['parent_sku']  = $index['groupSku'][$family['group']] ?? $parentSku;
             $row['size']        = $size;
             $row['description'] = $family['description'];
             // Every row of a product carries the product's main image. A second parent
@@ -140,6 +141,8 @@ abstract class WooCommerceFileImportJob extends ProductImportJob
     //  variations  - SKU of every priced "variation" row (unique in the file) =>
     //                [parent SKU, size label] — e.g. "XL" from "{parent name} - XL"
     //  groupImage  - product name => its main image (the first parent family's image)
+    //  groupSku    - product name => its product SKU (the first parent family's SKU, e.g.
+    //                "AP210-BLACK"); each size keeps its own variation SKU
     //  simpleNames - product name of every priced "simple" row => [how many such rows,
     //                the first one's image]
     // A few products are split over two parent rows with the same Group Name (e.g. small
@@ -150,6 +153,7 @@ abstract class WooCommerceFileImportJob extends ProductImportJob
         $parents     = [];
         $entries     = []; // product name => [[sku, parent sku, size label], ...] in file order
         $groupImage  = [];
+        $groupSku    = [];
         $simpleNames = [];
         $parent      = null;
 
@@ -166,6 +170,9 @@ abstract class WooCommerceFileImportJob extends ProductImportJob
                 ];
                 if ($parent['group'] !== '') {
                     $groupImage[$parent['group']] ??= $parent['image'];
+                    if ($parent['sku'] !== '') {
+                        $groupSku[$parent['group']] ??= $parent['sku'];
+                    }
                     $parents[$parent['sku']] = [
                         'group'       => $parent['group'],
                         'description' => $parent['description'],
@@ -210,6 +217,7 @@ abstract class WooCommerceFileImportJob extends ProductImportJob
             'parents'     => $parents,
             'variations'  => $variations,
             'groupImage'  => $groupImage,
+            'groupSku'    => $groupSku,
             'simpleNames' => $simpleNames,
         ];
     }

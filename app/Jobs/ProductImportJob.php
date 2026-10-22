@@ -392,6 +392,9 @@ class ProductImportJob implements ShouldQueue
 
             $grouped[$groupName][$attribute1][] = [
                 'sku'                   => $sku,
+                // The product's own SKU when the file gives one apart from the per-size
+                // SKUs (WooCommerce-style "variable" header rows, e.g. C-Force "AP210-BLACK").
+                'parent_sku'            => $this->value($row, ['parent_sku']),
                 'title'                 => $groupName,
                 'supplier_id'           => $this->supplierId,
                 'description'           => ProductTextCleaner::description($this->value($row, ['description_html', 'description'])),
@@ -648,10 +651,13 @@ class ProductImportJob implements ShouldQueue
 
         $product->supplier_id               = $item['supplier_id'];
         $product->product_type              = $productType;
-        // Variable products keep their per-size SKU in product_sub_variant_items instead
-        // (see insertSubVariantsAndItems) — only simple products need it stored here.
+        // Variable products keep their per-size SKU in product_sub_variant_items (see
+        // insertSubVariantsAndItems); the product itself gets the file's parent SKU when
+        // there is one (shown on the product page until a size is picked).
         if ($productType === 'simple' && !empty($item['sku'])) {
             $product->sku = $item['sku'];
+        } elseif ($productType === 'variable' && !empty($item['parent_sku'])) {
+            $product->sku = $item['parent_sku'];
         }
         $product->description               = $item['description'];
         $product->quantity                  = $item['quantity'];

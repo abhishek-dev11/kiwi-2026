@@ -102,7 +102,7 @@
                     <div class="stock_details">
                         <h6>Stock: <span class="stock_display">{{ $get_product['stock'] }}</span></h6>
                         <span>|</span>
-                        <h6>SKU: {{ $get_product['sku'] }}</h6>
+                        <h6>SKU: <span class="sku_display" data-default="{{ $get_product['sku'] }}">{{ $get_product['sku'] }}</span></h6>
                     </div>
                     <hr>
                     @php

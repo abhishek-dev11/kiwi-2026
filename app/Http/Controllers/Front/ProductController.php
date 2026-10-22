@@ -964,7 +964,8 @@ class ProductController extends Controller
             'html'    => $html,
             'stock'   => (int) $ProducSubtVariantItem->stock,
             'price'   => (float) $ProducSubtVariantItem->price,
+            'sku'     => (string) ($ProducSubtVariantItem->sku_number ?? ''),
         ]);
-    } 
+    }
 
 }
